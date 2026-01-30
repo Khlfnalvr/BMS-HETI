@@ -27,6 +27,11 @@ Q_nominal = 2.6;        % Kapasitas nominal baterai (Ah)
 eta = 1.0;              % Efisiensi Coulomb (1.0 = 100%)
 SOC_initial = 100;      % SOC awal (%) - sesuaikan dengan kondisi eksperimen
 
+% --- Parameter untuk SOC Reference (dari OCV) ---
+% R_o digunakan untuk kompensasi: OCV = V_terminal + R_o * I
+R_o_compensation = 0.05;  % Series resistance untuk kompensasi (Ohm)
+                          % Set ke 0 untuk tidak kompensasi (langsung pakai V_terminal)
+
 % --- Path File Data ---
 % Sesuaikan path jika file CSV tidak di folder parent
 ocv_file = '../OCV_vs_SOC_curve.csv';
@@ -176,20 +181,67 @@ fprintf('  -> Total Ah: %.4f Ah\n', abs(total_Ah));
 fprintf('  -> Voltage RMSE: %.4f V\n', sqrt(mean(voltage_error.^2)));
 
 %% ==========================================================================
+%  HITUNG SOC REFERENCE (dari Voltage + OCV Curve)
+%  ==========================================================================
+%  CATATAN PENTING:
+%  - SOC Reference dihitung dari: OCV_est = V_terminal + R_o * I
+%  - Kemudian lookup SOC dari kurva OCV
+%  - INI BUKAN SOC AKTUAL SEBENARNYA karena:
+%    1. Mengabaikan V_tr (transient voltage)
+%    2. Hanya akurat saat arus rendah/nol (rest period)
+%    3. Bergantung pada akurasi R_o dan kurva OCV
+%  - Gunakan sebagai REFERENSI KASAR untuk perbandingan
+%  ==========================================================================
+
+fprintf('\n--- Menghitung SOC Reference (dari OCV) ---\n');
+
+% Fungsi lookup SOC dari OCV (inverse lookup)
+lookup_soc_from_ocv = @(ocv) interp1(V0_ocv, SOC_ocv, ocv, 'linear', 'extrap');
+
+% Hitung SOC reference untuk setiap titik waktu
+SOC_reference = zeros(N, 1);
+OCV_estimated = zeros(N, 1);
+
+for k = 1:N
+    % Kompensasi resistansi: OCV = V_terminal + R_o * I (discharge: I positif)
+    OCV_estimated(k) = voltage_measured(k) + R_o_compensation * current_data(k);
+
+    % Lookup SOC dari OCV
+    SOC_reference(k) = lookup_soc_from_ocv(OCV_estimated(k));
+
+    % Clamp ke range valid
+    SOC_reference(k) = max(0, min(100, SOC_reference(k)));
+end
+
+% Hitung error SOC (estimasi vs reference)
+SOC_error = SOC_estimated - SOC_reference;
+SOC_RMSE = sqrt(mean(SOC_error.^2));
+SOC_MAE = mean(abs(SOC_error));
+
+fprintf('  -> R_o kompensasi: %.4f Ohm\n', R_o_compensation);
+fprintf('  -> SOC Reference akhir: %.2f%%\n', SOC_reference(end));
+fprintf('  -> SOC Error (CC - Ref) RMSE: %.2f%%\n', SOC_RMSE);
+fprintf('  -> SOC Error (CC - Ref) MAE: %.2f%%\n', SOC_MAE);
+fprintf('  CATATAN: SOC Reference hanya akurat saat arus rendah/nol!\n');
+
+%% ==========================================================================
 %  OUTPUT - GRAFIK (Figure Terpisah)
 %  ==========================================================================
 
 fprintf('\n--- Membuat Grafik ---\n');
 
-% --- Figure 1: SOC vs Time ---
+% --- Figure 1: SOC vs Time (dengan Reference) ---
 figure('Name', 'Coulomb Counting - SOC vs Time', 'NumberTitle', 'off');
-plot(time_data, SOC_estimated, 'b-', 'LineWidth', 1.5);
+plot(time_data, SOC_estimated, 'b-', 'LineWidth', 1.5, 'DisplayName', 'SOC Estimated (CC)');
+hold on;
+plot(time_data, SOC_reference, 'r--', 'LineWidth', 1.0, 'DisplayName', 'SOC Reference (OCV)');
+hold off;
 xlabel('Time (s)');
 ylabel('State of Charge (%)');
-title('Coulomb Counting: SOC Estimation vs Time');
+title('Coulomb Counting: SOC Estimation vs Reference');
 grid on;
 ylim([0 105]);
-legend('SOC Estimated (CC)', 'Location', 'best');
+legend('Location', 'best');
 
 % --- Figure 2: Voltage vs Time ---
 figure('Name', 'Coulomb Counting - Voltage vs Time', 'NumberTitle', 'off');
@@ -220,8 +272,18 @@ ylabel('Voltage Error (V)');
 title('Coulomb Counting: Voltage Error (Measured - Predicted)');
 grid on;
 legend('Voltage Error', 'Location', 'best');
+hold on;
+plot([time_data(1), time_data(end)], [0, 0], 'k--', 'LineWidth', 0.5);
+hold off;
 
-% Tambahkan garis nol untuk referensi
+% --- Figure 5: SOC Error vs Time (Estimated - Reference) ---
+figure('Name', 'Coulomb Counting - SOC Error vs Time', 'NumberTitle', 'off');
+plot(time_data, SOC_error, 'r-', 'LineWidth', 1.0);
+xlabel('Time (s)');
+ylabel('SOC Error (%)');
+title('Coulomb Counting: SOC Error (Estimated - Reference)');
+grid on;
+legend('SOC Error (CC - OCV Ref)', 'Location', 'best');
 hold on;
 plot([time_data(1), time_data(end)], [0, 0], 'k--', 'LineWidth', 0.5);
 hold off;
@@ -236,6 +298,9 @@ fprintf('\n--- Menyimpan Hasil ---\n');
 results.algorithm = 'Coulomb Counting';
 results.time_data = time_data;
 results.SOC_estimated = SOC_estimated;
+results.SOC_reference = SOC_reference;
+results.SOC_error = SOC_error;
+results.OCV_estimated = OCV_estimated;
 results.voltage_measured = voltage_measured;
 results.voltage_predicted = voltage_predicted;
 results.voltage_error = voltage_error;
@@ -246,11 +311,15 @@ results.temperature_data = temperature_data;
 results.parameters.Q_nominal = Q_nominal;
 results.parameters.eta = eta;
 results.parameters.SOC_initial = SOC_initial;
+results.parameters.R_o_compensation = R_o_compensation;
 results.parameters.time_start = t_start;
 results.parameters.time_end = t_end;
 
 % Statistik
-results.statistics.SOC_final = SOC_estimated(end);
+results.statistics.SOC_final_estimated = SOC_estimated(end);
+results.statistics.SOC_final_reference = SOC_reference(end);
+results.statistics.SOC_RMSE = SOC_RMSE;
+results.statistics.SOC_MAE = SOC_MAE;
 results.statistics.total_Ah = total_Ah;
 results.statistics.voltage_RMSE = sqrt(mean(voltage_error.^2));
 results.statistics.voltage_MAE = mean(abs(voltage_error));
@@ -271,14 +340,23 @@ fprintf('Time Range:      %.2f s - %.2f s\n', t_start, t_end);
 fprintf('Duration:        %.2f hours\n', (t_end - t_start)/3600);
 fprintf('Data Points:     %d samples\n', length(time_data));
 fprintf('----------------------------------------\n');
-fprintf('SOC Awal:        %.2f%%\n', SOC_initial);
-fprintf('SOC Akhir:       %.2f%%\n', SOC_estimated(end));
-fprintf('Perubahan SOC:   %.2f%%\n', SOC_initial - SOC_estimated(end));
-fprintf('Total Ah:        %.4f Ah\n', abs(total_Ah));
+fprintf('SOC Awal:             %.2f%%\n', SOC_initial);
+fprintf('SOC Akhir (CC):       %.2f%%\n', SOC_estimated(end));
+fprintf('SOC Akhir (Ref OCV):  %.2f%%\n', SOC_reference(end));
+fprintf('Perubahan SOC:        %.2f%%\n', SOC_initial - SOC_estimated(end));
+fprintf('Total Ah:             %.4f Ah\n', abs(total_Ah));
+fprintf('----------------------------------------\n');
+fprintf('PERBANDINGAN dengan SOC Reference (OCV):\n');
+fprintf('  SOC RMSE:      %.2f%%\n', SOC_RMSE);
+fprintf('  SOC MAE:       %.2f%%\n', SOC_MAE);
+fprintf('----------------------------------------\n');
 fprintf('Voltage RMSE:    %.4f V\n', results.statistics.voltage_RMSE);
 fprintf('Voltage MAE:     %.4f V\n', results.statistics.voltage_MAE);
 fprintf('========================================\n');
-fprintf('\nCATATAN: Coulomb Counting TIDAK menggunakan\n');
-fprintf('koreksi berbasis OCV. Error akan terakumulasi\n');
-fprintf('seiring waktu.\n');
+fprintf('\nCATATAN PENTING:\n');
+fprintf('1. Coulomb Counting TIDAK menggunakan koreksi\n');
+fprintf('   berbasis OCV. Error terakumulasi seiring waktu.\n');
+fprintf('2. SOC Reference (OCV) BUKAN nilai aktual!\n');
+fprintf('   Hanya akurat saat arus rendah/nol.\n');
+fprintf('   Gunakan sebagai referensi kasar saja.\n');
 fprintf('========================================\n');
