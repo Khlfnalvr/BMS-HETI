@@ -36,26 +36,43 @@ clear; clc; close all;
 Q_nominal = 2.6;        % Kapasitas nominal baterai (Ah)
 eta = 1.0;              % Efisiensi Coulomb (1.0 = 100%)
 SOC_initial = 100;      % SOC awal (%) - sesuaikan dengan kondisi eksperimen
+                        % Set ke [] untuk auto-estimasi dari voltage awal
 
 % --- Parameter Model RC (default dari kode C, untuk 25°C) ---
-% Nilai ini akan digunakan jika tidak ada lookup table
+% PENTING: Sesuaikan nilai ini dengan baterai Anda untuk hasil lebih akurat
 R_o_default = 0.052;    % Series resistance (Ohm)
 R_tr_default = 0.008;   % Transient resistance (Ohm)
 tau_default = 130;      % Time constant (seconds)
 
 % --- Parameter UKF ---
 alpha = 1.0;            % Spread of sigma points (0.001 to 1)
-beta = 1.0;             % Prior knowledge (2 for Gaussian)
+beta = 2.0;             % Prior knowledge (2 for Gaussian - optimal)
 kappa = 0.0;            % Secondary scaling parameter
 
 % --- Initial Covariances ---
-P_init = [1e-6, 0; 0, 1.0];     % State covariance: sangat yakin SOC, tidak yakin V_tr
-Q_init = [0.1, 0; 0, 0.1];      % Process noise covariance
-R_init = 0.25;                   % Measurement noise covariance (~0.5V std dev)
+% TIPS untuk tuning:
+%   - P_soc tinggi (misal 100): filter lebih percaya measurement, konvergensi cepat
+%   - P_soc rendah (misal 1e-6): filter lebih percaya model, konvergensi lambat
+%   - Q tinggi: filter lebih responsif tapi lebih noisy
+%   - R tinggi: filter lebih smooth tapi lambat merespon
+P_soc_init = 100;       % Initial SOC variance (tinggi = tidak yakin SOC awal)
+P_vtr_init = 0.01;      % Initial V_tr variance
+P_init = [P_soc_init, 0; 0, P_vtr_init];
+
+Q_soc = 0.001;          % Process noise SOC (model uncertainty)
+Q_vtr = 0.001;          % Process noise V_tr
+Q_init = [Q_soc, 0; 0, Q_vtr];
+
+R_init = 0.01;          % Measurement noise (voltage sensor noise ~0.1V std dev)
 
 % --- Adaptive Noise Settings ---
 adaptive_window = 10;   % Window size untuk adaptive noise estimation
 enable_adaptive = true; % Enable/disable adaptive noise
+
+% --- Warm-up Period ---
+% Filter butuh waktu untuk konvergensi, skip data awal untuk statistik
+warmup_samples = 100;   % Jumlah sampel awal yang di-skip untuk perhitungan RMSE
+                        % Set ke 0 untuk tidak skip
 
 % --- Path File Data ---
 ocv_file = '../OCV_vs_SOC_curve.csv';
@@ -164,10 +181,36 @@ fprintf('  -> Average dt: %.3f seconds\n', mean(dt(2:end)));
 % Fungsi lookup OCV dari SOC
 lookup_ocv = @(soc) interp1(SOC_ocv, V0_ocv, soc, 'linear', 'extrap');
 
+% Fungsi INVERSE: lookup SOC dari OCV (untuk auto-estimasi SOC awal)
+lookup_soc_from_ocv = @(ocv) interp1(V0_ocv, SOC_ocv, ocv, 'linear', 'extrap');
+
 % Fungsi lookup parameter RC (simplified - bisa diperluas dengan lookup table)
 get_Ro = @(soc, temp) R_o_default;
 get_Rtr = @(soc, temp) R_tr_default;
 get_tau = @(soc, temp) tau_default;
+
+%% ==========================================================================
+%  AUTO-ESTIMATE INITIAL SOC (jika tidak ditentukan)
+%  ==========================================================================
+
+if isempty(SOC_initial)
+    % Estimasi SOC awal dari voltage pertama menggunakan kurva OCV
+    V_first = voltage_measured(1);
+    I_first = current_data(1);
+
+    % Kompensasi resistansi: OCV = V_terminal + R_o * I
+    OCV_estimated = V_first + R_o_default * I_first;
+
+    % Lookup SOC dari OCV
+    SOC_initial = lookup_soc_from_ocv(OCV_estimated);
+    SOC_initial = max(0, min(100, SOC_initial));
+
+    fprintf('\n--- Auto-Estimasi SOC Awal ---\n');
+    fprintf('  -> Voltage pertama: %.4f V\n', V_first);
+    fprintf('  -> Current pertama: %.4f A\n', I_first);
+    fprintf('  -> OCV terkoreksi: %.4f V\n', OCV_estimated);
+    fprintf('  -> SOC awal (estimasi): %.2f%%\n', SOC_initial);
+end
 
 %% ==========================================================================
 %  INITIALIZE UKF PARAMETERS
@@ -427,7 +470,19 @@ fprintf('  -> SOC akhir (CC only): %.2f%%\n', SOC_cc_only(end));
 
 % Calculate errors
 voltage_error = voltage_measured - voltage_predicted;
-fprintf('  -> Voltage RMSE: %.4f V\n', sqrt(mean(voltage_error.^2)));
+
+% Calculate RMSE (excluding warm-up period)
+if warmup_samples > 0 && warmup_samples < N
+    idx_valid = (warmup_samples+1):N;
+    voltage_RMSE_warmup = sqrt(mean(voltage_error(idx_valid).^2));
+    voltage_RMSE_full = sqrt(mean(voltage_error.^2));
+    fprintf('  -> Voltage RMSE (full): %.4f V\n', voltage_RMSE_full);
+    fprintf('  -> Voltage RMSE (setelah warmup %d samples): %.4f V\n', warmup_samples, voltage_RMSE_warmup);
+else
+    voltage_RMSE_full = sqrt(mean(voltage_error.^2));
+    voltage_RMSE_warmup = voltage_RMSE_full;
+    fprintf('  -> Voltage RMSE: %.4f V\n', voltage_RMSE_full);
+end
 
 %% ==========================================================================
 %  OUTPUT - GRAFIK (Figure Terpisah)
@@ -539,10 +594,21 @@ results.parameters.time_end = t_end;
 % Statistik
 results.statistics.SOC_final_AUKF = SOC_estimated(end);
 results.statistics.SOC_final_CC = SOC_cc_only(end);
-results.statistics.voltage_RMSE = sqrt(mean(voltage_error.^2));
-results.statistics.voltage_MAE = mean(abs(voltage_error));
-results.statistics.innovation_mean = mean(innovation_history);
-results.statistics.innovation_std = std(innovation_history);
+results.statistics.voltage_RMSE_full = voltage_RMSE_full;
+results.statistics.voltage_RMSE_after_warmup = voltage_RMSE_warmup;
+results.statistics.warmup_samples = warmup_samples;
+
+if warmup_samples > 0 && warmup_samples < N
+    results.statistics.voltage_MAE_full = mean(abs(voltage_error));
+    results.statistics.voltage_MAE_after_warmup = mean(abs(voltage_error(idx_valid)));
+    results.statistics.innovation_mean = mean(innovation_history(idx_valid));
+    results.statistics.innovation_std = std(innovation_history(idx_valid));
+else
+    results.statistics.voltage_MAE_full = mean(abs(voltage_error));
+    results.statistics.voltage_MAE_after_warmup = mean(abs(voltage_error));
+    results.statistics.innovation_mean = mean(innovation_history);
+    results.statistics.innovation_std = std(innovation_history);
+end
 
 % Save ke file .mat
 output_file = 'kalman_filter_results.mat';
@@ -559,17 +625,28 @@ fprintf('========================================\n');
 fprintf('Time Range:         %.2f s - %.2f s\n', t_start, t_end);
 fprintf('Duration:           %.2f hours\n', (t_end - t_start)/3600);
 fprintf('Data Points:        %d samples\n', length(time_data));
+fprintf('Warmup Samples:     %d\n', warmup_samples);
 fprintf('----------------------------------------\n');
 fprintf('SOC Awal:           %.2f%%\n', SOC_initial);
 fprintf('SOC Akhir (AUKF):   %.2f%%\n', SOC_estimated(end));
 fprintf('SOC Akhir (CC):     %.2f%%\n', SOC_cc_only(end));
 fprintf('Perbedaan:          %.2f%%\n', abs(SOC_estimated(end) - SOC_cc_only(end)));
-fprintf('Voltage RMSE:       %.4f V\n', results.statistics.voltage_RMSE);
-fprintf('Voltage MAE:        %.4f V\n', results.statistics.voltage_MAE);
+fprintf('----------------------------------------\n');
+fprintf('AKURASI (full data):\n');
+fprintf('  Voltage RMSE:     %.4f V\n', voltage_RMSE_full);
+fprintf('  Voltage MAE:      %.4f V\n', results.statistics.voltage_MAE_full);
+if warmup_samples > 0 && warmup_samples < N
+    fprintf('AKURASI (setelah warmup):\n');
+    fprintf('  Voltage RMSE:     %.4f V\n', voltage_RMSE_warmup);
+    fprintf('  Voltage MAE:      %.4f V\n', results.statistics.voltage_MAE_after_warmup);
+end
+fprintf('----------------------------------------\n');
 fprintf('Innovation Mean:    %.4f V\n', results.statistics.innovation_mean);
 fprintf('Innovation Std:     %.4f V\n', results.statistics.innovation_std);
 fprintf('========================================\n');
-fprintf('\nKalman Filter menggunakan OCV untuk koreksi\n');
-fprintf('sehingga error tidak terakumulasi seperti\n');
-fprintf('Coulomb Counting murni.\n');
+fprintf('\nTIPS JIKA HASIL TIDAK AKURAT:\n');
+fprintf('1. Sesuaikan kurva OCV dengan baterai Anda\n');
+fprintf('2. Tuning parameter R_o, R_tr, tau\n');
+fprintf('3. Naikkan P_soc_init untuk konvergensi cepat\n');
+fprintf('4. Set SOC_initial = [] untuk auto-estimasi\n');
 fprintf('========================================\n');
