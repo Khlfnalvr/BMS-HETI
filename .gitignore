@@ -1,0 +1,15 @@
+# Compiled object files
+*.o
+
+# Executables
+bms_main
+bms_test
+
+# Test results
+test_data/test_results.csv
+
+# Symbolic links for case-insensitive headers
+aukf.h
+bateryparameter.h
+cc.h
+socestimator.h
