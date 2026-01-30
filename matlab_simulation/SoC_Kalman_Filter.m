@@ -1,4 +1,4 @@
-function [results] = SoC_Kalman_Filter(data_file)
+function [results] = SoC_Kalman_Filter(data_file, initial_soc, ocv_csv_file)
     % SoC_Kalman_Filter - Estimasi SoC menggunakan Adaptive Unscented Kalman Filter
     %
     % ╔════════════════════════════════════════════════════════════════════════╗
@@ -19,32 +19,30 @@ function [results] = SoC_Kalman_Filter(data_file)
     %            tegangan terukur dan tegangan prediksi dari model OCV
     %
     % Input:
-    %   data_file - Path ke file CSV dengan data test baterai
-    %               (default: 'battery_test_data.csv')
+    %   data_file    - Path ke file CSV dengan data test baterai
+    %                  Format 1: battery_test_data.csv (dengan True_SoC)
+    %                  Format 2: Experimental_data_fresh_cell.csv (tanpa True_SoC)
+    %   initial_soc  - (Optional) SoC awal dalam % (default: 80)
+    %   ocv_csv_file - (Optional) Path ke OCV CSV file (SOC, V0)
     %
     % Output:
-    %   results   - Struct berisi hasil estimasi dengan field:
-    %               .time          - Waktu (detik)
-    %               .current       - Arus (A)
-    %               .voltage       - Tegangan (V)
-    %               .temperature   - Temperatur (C)
-    %               .true_soc      - SoC sebenarnya (%)
-    %               .soc_cc        - SoC prediksi Coulomb Counting (%)
-    %               .soc_aukf      - SoC estimasi AUKF (%)
-    %               .v_predicted   - Tegangan prediksi (V)
-    %               .innovation    - Innovation (residual) (V)
-    %               .v_tr          - State tegangan transien (V)
-    %               .error_cc      - Error CC (%)
-    %               .error_aukf    - Error AUKF (%)
-    %               .stats_cc      - Statistik error CC
-    %               .stats_aukf    - Statistik error AUKF
+    %   results   - Struct berisi hasil estimasi
     %
     % Contoh penggunaan:
+    %   % Dengan data lama
     %   results = SoC_Kalman_Filter('battery_test_data.csv');
+    %   % Dengan data baru + OCV custom
+    %   results = SoC_Kalman_Filter('Experimental_data_fresh_cell.csv', 80, 'OCV_vs_SOC_curve.csv');
 
     %% Setup
     if nargin < 1
         data_file = 'battery_test_data.csv';
+    end
+    if nargin < 2
+        initial_soc = 80;
+    end
+    if nargin < 3
+        ocv_csv_file = '';
     end
 
     fprintf('========================================\n');

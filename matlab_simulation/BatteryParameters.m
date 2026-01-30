@@ -7,20 +7,20 @@ classdef BatteryParameters
     % - Resistansi seri (Ro) dan resistansi transien (Rtr)
     % - Konstanta waktu (tau)
     %
-    % Semua parameter tersedia untuk 2 temperatur: 25C dan 45C
+    % Dapat menggunakan data default atau load dari CSV file
 
     properties (Constant)
         % Spesifikasi Baterai
         Q_NOMINAL = 2.6;    % Kapasitas nominal (Ah)
         V_NOMINAL = 3.7;    % Tegangan nominal (V)
 
-        % Titik breakpoint SoC (%)
+        % Titik breakpoint SoC default (%)
         SOC_POINTS = [0, 10, 25, 50, 75, 90, 100];
 
-        % Tabel OCV pada 25C (V) - dari optimasi AVOA
+        % Tabel OCV default pada 25C (V) - dari optimasi AVOA
         OCV_25C = [3.00, 3.06, 3.13, 3.22, 3.42, 3.58, 3.70];
 
-        % Tabel OCV pada 45C (V)
+        % Tabel OCV default pada 45C (V)
         OCV_45C = [3.2109, 3.2812, 3.3409, 3.4269, 3.6409, 3.7954, 3.9009];
 
         % Resistansi seri Ro pada 25C (Ohm)
@@ -43,12 +43,53 @@ classdef BatteryParameters
     end
 
     methods (Static)
-        function ocv = getOCV(soc, temperature)
+        function [soc_points, ocv_values] = loadOCVFromCSV(csv_file)
+            % loadOCVFromCSV - Load OCV data dari CSV file
+            %
+            % Input:
+            %   csv_file - Path ke file CSV dengan kolom: SOC, V0
+            %
+            % Output:
+            %   soc_points  - Array SoC points (%)
+            %   ocv_values  - Array OCV values (V)
+            %
+            % Format CSV:
+            %   SOC,V0
+            %   0,3.00
+            %   10,3.06
+            %   ...
+
+            fprintf('Loading OCV data dari: %s\n', csv_file);
+
+            % Baca CSV
+            data = readtable(csv_file);
+
+            % Ambil kolom SOC dan V0
+            if ismember('SOC', data.Properties.VariableNames) && ...
+               ismember('V0', data.Properties.VariableNames)
+                soc_points = data.SOC;
+                ocv_values = data.V0;
+
+                % Sort berdasarkan SoC (ascending)
+                [soc_points, idx] = sort(soc_points);
+                ocv_values = ocv_values(idx);
+
+                fprintf('  Loaded %d OCV data points\n', length(soc_points));
+                fprintf('  SoC range: %.1f%% - %.1f%%\n', min(soc_points), max(soc_points));
+                fprintf('  OCV range: %.3fV - %.3fV\n\n', min(ocv_values), max(ocv_values));
+            else
+                error('CSV file harus memiliki kolom: SOC dan V0');
+            end
+        end
+
+        function ocv = getOCV(soc, temperature, soc_points, ocv_values)
             % getOCV - Mendapatkan OCV berdasarkan SoC dan temperatur
             %
             % Input:
             %   soc         - State of Charge (0-100%)
             %   temperature - Temperatur baterai (Celsius)
+            %   soc_points  - (Optional) Custom SoC points dari CSV
+            %   ocv_values  - (Optional) Custom OCV values dari CSV
             %
             % Output:
             %   ocv         - Open Circuit Voltage (V)
@@ -56,15 +97,22 @@ classdef BatteryParameters
             % Batasi SoC ke range valid
             soc = max(0, min(100, soc));
 
-            % Pilih tabel berdasarkan temperatur
-            if temperature <= 35.0
-                ocv_table = BatteryParameters.OCV_25C;
+            % Gunakan custom data jika disediakan
+            if nargin >= 4 && ~isempty(soc_points) && ~isempty(ocv_values)
+                % Interpolasi dari custom data
+                ocv = interp1(soc_points, ocv_values, soc, 'linear', 'extrap');
             else
-                ocv_table = BatteryParameters.OCV_45C;
-            end
+                % Gunakan data default
+                % Pilih tabel berdasarkan temperatur
+                if temperature <= 35.0
+                    ocv_table = BatteryParameters.OCV_25C;
+                else
+                    ocv_table = BatteryParameters.OCV_45C;
+                end
 
-            % Interpolasi linear
-            ocv = interp1(BatteryParameters.SOC_POINTS, ocv_table, soc, 'linear', 'extrap');
+                % Interpolasi linear
+                ocv = interp1(BatteryParameters.SOC_POINTS, ocv_table, soc, 'linear', 'extrap');
+            end
         end
 
         function ro = getRo(soc, temperature)
