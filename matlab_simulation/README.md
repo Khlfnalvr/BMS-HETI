@@ -4,23 +4,35 @@
 
 Repositori ini berisi implementasi MATLAB untuk estimasi State of Charge (SoC) baterai menggunakan dua metode berbeda:
 
-1. **Coulomb Counting (CC)** - Metode murni integrasi arus tanpa koreksi OCV
-2. **Adaptive Unscented Kalman Filter (AUKF)** - Metode Kalman Filter dengan koreksi berbasis OCV (Open Circuit Voltage)
+1. **Coulomb Counting (CC)** - Metode murni integrasi arus **❌ TANPA koreksi OCV**
+2. **Adaptive Unscented Kalman Filter (AUKF)** - Metode Kalman Filter **✅ DENGAN koreksi berbasis OCV** (Open Circuit Voltage)
 
 Implementasi ini adalah konversi dari kode C yang sebelumnya dibuat, untuk memudahkan simulasi dan analisis di MATLAB.
+
+### ✅ Konfirmasi Penggunaan OCV
+
+**PENTING:** Kalman Filter dalam `SoC_Kalman_Filter.m` **BENAR-BENAR MENGGUNAKAN OCV** untuk koreksi!
+
+- **Bukti:** Line 204 di `SoC_Kalman_Filter.m`
+- **Kode:** `OCV = BatteryParameters.getOCV(sp(1), temp);`
+- **Model:** `V_terminal = OCV(SoC) - I*Ro - V_tr`
+
+Lihat file `OCV_USAGE_CONFIRMATION.md` untuk dokumentasi lengkap tentang penggunaan OCV.
 
 ## 📁 Struktur File
 
 ```
 matlab_simulation/
 ├── README.md                      # File ini
+├── OCV_USAGE_CONFIRMATION.md      # Dokumentasi penggunaan OCV (PENTING!)
 ├── battery_test_data.csv          # Data test baterai (110 menit discharge)
 ├── BatteryParameters.m            # Class parameter baterai dan fungsi OCV lookup
-├── SoC_Coulomb_Counting.m        # Estimasi SoC dengan Coulomb Counting saja
+├── SoC_Coulomb_Counting.m        # Estimasi SoC dengan CC TANPA OCV
 ├── SoC_Kalman_Filter.m           # Estimasi SoC dengan AUKF + OCV
 ├── Compare_Methods.m              # Script perbandingan kedua metode
-├── results_coulomb_counting.csv  # Hasil CC (akan dibuat saat running)
-└── results_kalman_filter.csv     # Hasil AUKF (akan dibuat saat running)
+├── run_simulation.m               # Menu interaktif untuk running
+├── results_coulomb_counting.csv  # Hasil CC (dibuat saat running)
+└── results_kalman_filter.csv     # Hasil AUKF (dibuat saat running)
 ```
 
 ## 🚀 Cara Menggunakan
@@ -67,21 +79,43 @@ Script ini akan:
 - ✅ Membuat plot perbandingan komprehensif
 - ✅ Memberikan kesimpulan otomatis
 
-## 📊 Hasil yang Diharapkan
+## 📊 Output yang Dihasilkan
 
-### Coulomb Counting (CC)
-- **Keuntungan**: Sederhana, cepat, tidak memerlukan model baterai
-- **Kekurangan**: Akumulasi error (drift), tidak ada koreksi
+### ✅ Format Output Telah Distandarisasi!
 
-### Kalman Filter (AUKF) dengan OCV
-- **Keuntungan**: Koreksi otomatis menggunakan voltage, mengurangi drift
-- **Kekurangan**: Lebih kompleks, memerlukan parameter baterai yang akurat
+Kedua metode sekarang menghasilkan output dengan format yang **KONSISTEN** untuk memudahkan perbandingan:
+
+#### Plot (4 Subplot untuk Kedua Metode)
+1. **Subplot 1:** Perbandingan SoC (True vs Estimated)
+2. **Subplot 2:** Error Estimasi
+3. **Subplot 3:** Profil Arus Discharge
+4. **Subplot 4:** Tegangan Terminal (+ Innovation untuk AUKF)
+
+#### File CSV
+
+**Coulomb Counting** (`results_coulomb_counting.csv`):
+```
+Time_sec, Current_A, Voltage_V, Temperature_C, True_SoC, SoC_CC, Error_CC
+```
+
+**Kalman Filter** (`results_kalman_filter.csv`):
+```
+Time_sec, Current_A, Voltage_V, Temperature_C, True_SoC,
+SoC_CC, SoC_AUKF, V_predicted, Innovation, V_tr, Error_CC, Error_AUKF
+```
+
+### Perbandingan Metode
+
+| Metode | Menggunakan OCV? | Input | Koreksi | Drift |
+|--------|------------------|-------|---------|-------|
+| **Coulomb Counting** | ❌ TIDAK | Arus saja | Tidak ada | Ya |
+| **Kalman Filter** | ✅ YA | Arus + Voltage | OCV-based | Minimal |
 
 **Ekspektasi Performa:**
 - AUKF Mean Error: < ±1%
 - AUKF Std Deviation: < 0.5%
 - AUKF Max Error: < 2%
-- AUKF harus lebih baik dari CC
+- AUKF harus lebih baik dari CC karena ada koreksi OCV
 
 ## 🔬 Detail Algoritma
 

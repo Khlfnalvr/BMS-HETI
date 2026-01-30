@@ -1,9 +1,22 @@
 function [results] = SoC_Kalman_Filter(data_file)
     % SoC_Kalman_Filter - Estimasi SoC menggunakan Adaptive Unscented Kalman Filter
     %
-    % Fungsi ini mengimplementasikan estimasi SoC dengan metode AUKF yang
-    % menggunakan Coulomb Counting untuk prediksi dan OCV untuk koreksi
-    % berdasarkan pengukuran tegangan terminal.
+    % ╔════════════════════════════════════════════════════════════════════════╗
+    % ║  PENTING: Fungsi ini menggunakan AUKF dengan OCV untuk KOREKSI!      ║
+    % ╚════════════════════════════════════════════════════════════════════════╝
+    %
+    % Algoritma:
+    % 1. PREDICTION: Coulomb Counting (tanpa OCV) -> SoC drift
+    % 2. UPDATE: OCV-based correction -> Mengurangi drift
+    %
+    % Measurement Model menggunakan OCV:
+    %    V_terminal = OCV(SoC) - I*Ro - V_tr
+    %    └─ OCV(SoC) diambil dari tabel lookup BatteryParameters.getOCV()
+    %
+    % Proses:
+    % - Prediksi: SoC berkurang sesuai integrasi arus (Coulomb Counting)
+    % - Koreksi: Kalman gain menyesuaikan SoC berdasarkan selisih antara
+    %            tegangan terukur dan tegangan prediksi dari model OCV
     %
     % Input:
     %   data_file - Path ke file CSV dengan data test baterai
@@ -173,12 +186,22 @@ function [results] = SoC_Kalman_Filter(data_file)
         end
 
         % Transform sigma points melalui measurement model
+        % ╔═══════════════════════════════════════════════════════════╗
+        % ║  INI ADALAH BAGIAN KUNCI: PENGGUNAAN OCV UNTUK KOREKSI!  ║
+        % ╚═══════════════════════════════════════════════════════════╝
         Z_sigma = zeros(1, 2*L+1);
         for i = 1:(2*L+1)
             sp = sigma_points_update(:, i);
 
-            % Measurement model: V_terminal = OCV - I*Ro - V_tr
-            OCV = BatteryParameters.getOCV(sp(1), temp);  % MENGGUNAKAN OCV!
+            % *** MEASUREMENT MODEL MENGGUNAKAN OCV ***
+            % Model: V_terminal = OCV(SoC) - I*Ro - V_tr
+            %
+            % Di sini OCV(SoC) digunakan untuk memprediksi tegangan terminal
+            % berdasarkan SoC yang di-estimate. Selisih antara tegangan
+            % terukur dan prediksi (innovation) akan digunakan oleh Kalman
+            % gain untuk mengoreksi estimasi SoC.
+            %
+            OCV = BatteryParameters.getOCV(sp(1), temp);  % ← OCV dari lookup table!
             Ro = BatteryParameters.getRo(sp(1), temp);
             V_term = OCV - I * Ro - sp(2);
 
@@ -287,51 +310,55 @@ function [results] = SoC_Kalman_Filter(data_file)
     results.stats_aukf = stats_aukf;
 
     %% Plot Hasil
-    figure('Position', [100, 100, 1200, 1000]);
+    figure('Position', [100, 100, 1200, 900]);
 
     % Subplot 1: SoC Comparison
     subplot(4, 1, 1);
-    plot(time/60, true_soc, 'k-', 'LineWidth', 2, 'DisplayName', 'SoC Sebenarnya');
+    plot(time/60, true_soc, 'k-', 'LineWidth', 2.5, 'DisplayName', 'SoC Sebenarnya');
     hold on;
-    plot(time/60, soc_cc, 'b--', 'LineWidth', 1.5, 'DisplayName', 'Coulomb Counting');
-    plot(time/60, soc_aukf, 'r-', 'LineWidth', 1.5, 'DisplayName', 'AUKF');
-    xlabel('Waktu (menit)');
-    ylabel('SoC (%)');
-    title('Perbandingan SoC: CC vs AUKF vs True SoC');
-    legend('Location', 'best');
+    plot(time/60, soc_aukf, 'r-', 'LineWidth', 1.8, 'DisplayName', 'AUKF (dengan OCV)');
+    plot(time/60, soc_cc, 'b--', 'LineWidth', 1.3, 'DisplayName', 'Prediksi CC (tanpa OCV)');
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    ylabel('SoC (%)', 'FontSize', 10);
+    title('KALMAN FILTER (AUKF + OCV) - Perbandingan SoC', 'FontSize', 12, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 9);
     grid on;
+    ylim([0 100]);
 
-    % Subplot 2: Error Comparison
+    % Subplot 2: Error
     subplot(4, 1, 2);
-    plot(time/60, error_cc, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Error CC');
-    hold on;
     plot(time/60, error_aukf, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Error AUKF');
+    hold on;
     yline(0, 'k--', 'LineWidth', 1);
-    xlabel('Waktu (menit)');
-    ylabel('Error (%)');
-    title('Perbandingan Error');
-    legend('Location', 'best');
+    yline(stats_aukf.mean_error, 'r--', 'LineWidth', 1, 'DisplayName', sprintf('Mean: %+.3f%%', stats_aukf.mean_error));
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    ylabel('Error (%)', 'FontSize', 10);
+    title('Error Estimasi AUKF', 'FontSize', 11, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 9);
     grid on;
 
-    % Subplot 3: Voltage Comparison
+    % Subplot 3: Arus
     subplot(4, 1, 3);
+    plot(time/60, current, 'b-', 'LineWidth', 1.5);
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    ylabel('Arus (A)', 'FontSize', 10);
+    title('Profil Arus Discharge', 'FontSize', 11, 'FontWeight', 'bold');
+    grid on;
+
+    % Subplot 4: Tegangan dan Innovation
+    subplot(4, 1, 4);
+    yyaxis left;
     plot(time/60, voltage, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Measured');
     hold on;
-    plot(time/60, v_predicted, 'r--', 'LineWidth', 1.5, 'DisplayName', 'Predicted');
-    xlabel('Waktu (menit)');
-    ylabel('Tegangan (V)');
-    title('Perbandingan Tegangan');
-    legend('Location', 'best');
-    grid on;
-
-    % Subplot 4: Innovation
-    subplot(4, 1, 4);
-    plot(time/60, innovation*1000, 'b-', 'LineWidth', 1.5);
-    hold on;
-    yline(0, 'k--', 'LineWidth', 1);
-    xlabel('Waktu (menit)');
-    ylabel('Innovation (mV)');
-    title('Innovation (Residual Pengukuran)');
+    plot(time/60, v_predicted, 'r--', 'LineWidth', 1.3, 'DisplayName', 'Predicted (OCV-based)');
+    ylabel('Tegangan (V)', 'FontSize', 10);
+    yyaxis right;
+    plot(time/60, innovation*1000, 'm-', 'LineWidth', 1.0, 'DisplayName', 'Innovation');
+    yline(0, 'k:', 'LineWidth', 0.5);
+    ylabel('Innovation (mV)', 'FontSize', 10);
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    title('Tegangan Terminal dan Innovation', 'FontSize', 11, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 9);
     grid on;
 
     fprintf('Plot telah dibuat.\n');

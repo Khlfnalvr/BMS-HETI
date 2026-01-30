@@ -131,41 +131,46 @@ function [results] = SoC_Coulomb_Counting(data_file)
     results.stats = stats;
 
     %% Plot Hasil
-    figure('Position', [100, 100, 1200, 800]);
+    figure('Position', [100, 100, 1200, 900]);
 
     % Subplot 1: SoC Comparison
-    subplot(3, 1, 1);
-    plot(time/60, true_soc, 'k-', 'LineWidth', 2, 'DisplayName', 'SoC Sebenarnya');
+    subplot(4, 1, 1);
+    plot(time/60, true_soc, 'k-', 'LineWidth', 2.5, 'DisplayName', 'SoC Sebenarnya');
     hold on;
-    plot(time/60, soc_cc, 'b--', 'LineWidth', 1.5, 'DisplayName', 'Coulomb Counting');
-    xlabel('Waktu (menit)');
-    ylabel('SoC (%)');
-    title('Perbandingan SoC: Coulomb Counting vs True SoC');
-    legend('Location', 'best');
+    plot(time/60, soc_cc, 'b-', 'LineWidth', 1.8, 'DisplayName', 'Coulomb Counting');
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    ylabel('SoC (%)', 'FontSize', 10);
+    title('COULOMB COUNTING - Perbandingan SoC', 'FontSize', 12, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 9);
     grid on;
+    ylim([0 100]);
 
     % Subplot 2: Error
-    subplot(3, 1, 2);
+    subplot(4, 1, 2);
     plot(time/60, error_cc, 'b-', 'LineWidth', 1.5);
     hold on;
     yline(0, 'k--', 'LineWidth', 1);
-    yline(stats.mean_error, 'r--', 'LineWidth', 1, 'DisplayName', sprintf('Mean: %.3f%%', stats.mean_error));
-    xlabel('Waktu (menit)');
-    ylabel('Error (%)');
-    title('Error Estimasi Coulomb Counting');
-    legend('Location', 'best');
+    yline(stats.mean_error, 'r--', 'LineWidth', 1, 'DisplayName', sprintf('Mean: %+.3f%%', stats.mean_error));
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    ylabel('Error (%)', 'FontSize', 10);
+    title('Error Estimasi', 'FontSize', 11, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 9);
     grid on;
 
-    % Subplot 3: Arus dan Tegangan
-    subplot(3, 1, 3);
-    yyaxis left;
+    % Subplot 3: Arus
+    subplot(4, 1, 3);
     plot(time/60, current, 'b-', 'LineWidth', 1.5);
-    ylabel('Arus (A)');
-    yyaxis right;
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    ylabel('Arus (A)', 'FontSize', 10);
+    title('Profil Arus Discharge', 'FontSize', 11, 'FontWeight', 'bold');
+    grid on;
+
+    % Subplot 4: Tegangan
+    subplot(4, 1, 4);
     plot(time/60, voltage, 'r-', 'LineWidth', 1.5);
-    ylabel('Tegangan (V)');
-    xlabel('Waktu (menit)');
-    title('Profil Arus dan Tegangan');
+    xlabel('Waktu (menit)', 'FontSize', 10);
+    ylabel('Tegangan (V)', 'FontSize', 10);
+    title('Tegangan Terminal', 'FontSize', 11, 'FontWeight', 'bold');
     grid on;
 
     fprintf('Plot telah dibuat.\n');
