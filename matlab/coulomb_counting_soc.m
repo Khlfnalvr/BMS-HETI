@@ -37,6 +37,13 @@ exp_file = '../Experimental_data_fresh_cell.csv';
 % false = arus positif berarti charge
 current_positive_discharge = true;
 
+% --- Time Range Selection ---
+% Pilih range waktu data yang ingin digunakan (dalam detik)
+% Set ke [] atau 'auto' untuk menggunakan seluruh data
+% Contoh: time_start = 0; time_end = 3600; untuk 1 jam pertama
+time_start = [];        % Waktu mulai (detik), [] = dari awal
+time_end = [];          % Waktu akhir (detik), [] = sampai akhir
+
 %% ==========================================================================
 %  LOAD DATA
 %  ==========================================================================
@@ -61,16 +68,46 @@ end
 fprintf('Loading experimental data dari: %s\n', exp_file);
 try
     exp_data = readtable(exp_file);
-    time_data = exp_data.Time;
-    current_data = exp_data.Current;
-    voltage_measured = exp_data.Voltage;
-    temperature_data = exp_data.Temperature;
-    fprintf('  -> Experimental data loaded: %d samples\n', length(time_data));
-    fprintf('  -> Duration: %.2f seconds (%.2f minutes)\n', ...
-            time_data(end) - time_data(1), (time_data(end) - time_data(1))/60);
+    time_data_full = exp_data.Time;
+    current_data_full = exp_data.Current;
+    voltage_measured_full = exp_data.Voltage;
+    temperature_data_full = exp_data.Temperature;
+    fprintf('  -> Experimental data loaded: %d samples\n', length(time_data_full));
+    fprintf('  -> Full duration: %.2f seconds (%.2f hours)\n', ...
+            time_data_full(end) - time_data_full(1), (time_data_full(end) - time_data_full(1))/3600);
 catch ME
     error('Gagal load experimental data: %s', ME.message);
 end
+
+% --- Apply Time Range Filter ---
+% Determine time range
+if isempty(time_start)
+    t_start = time_data_full(1);
+else
+    t_start = time_start;
+end
+
+if isempty(time_end)
+    t_end = time_data_full(end);
+else
+    t_end = time_end;
+end
+
+% Find indices within time range
+idx_range = (time_data_full >= t_start) & (time_data_full <= t_end);
+
+% Extract data within time range
+time_data = time_data_full(idx_range);
+current_data = current_data_full(idx_range);
+voltage_measured = voltage_measured_full(idx_range);
+temperature_data = temperature_data_full(idx_range);
+
+fprintf('\n--- Time Range Selection ---\n');
+fprintf('  -> Requested range: %.2f s to %.2f s\n', t_start, t_end);
+fprintf('  -> Actual range: %.2f s to %.2f s\n', time_data(1), time_data(end));
+fprintf('  -> Selected samples: %d (dari %d total)\n', length(time_data), length(time_data_full));
+fprintf('  -> Selected duration: %.2f seconds (%.2f hours)\n', ...
+        time_data(end) - time_data(1), (time_data(end) - time_data(1))/3600);
 
 %% ==========================================================================
 %  PRE-PROCESSING
@@ -209,6 +246,8 @@ results.temperature_data = temperature_data;
 results.parameters.Q_nominal = Q_nominal;
 results.parameters.eta = eta;
 results.parameters.SOC_initial = SOC_initial;
+results.parameters.time_start = t_start;
+results.parameters.time_end = t_end;
 
 % Statistik
 results.statistics.SOC_final = SOC_estimated(end);
@@ -228,6 +267,10 @@ fprintf('  -> Hasil disimpan ke: %s\n', output_file);
 fprintf('\n========================================\n');
 fprintf('RINGKASAN HASIL COULOMB COUNTING\n');
 fprintf('========================================\n');
+fprintf('Time Range:      %.2f s - %.2f s\n', t_start, t_end);
+fprintf('Duration:        %.2f hours\n', (t_end - t_start)/3600);
+fprintf('Data Points:     %d samples\n', length(time_data));
+fprintf('----------------------------------------\n');
 fprintf('SOC Awal:        %.2f%%\n', SOC_initial);
 fprintf('SOC Akhir:       %.2f%%\n', SOC_estimated(end));
 fprintf('Perubahan SOC:   %.2f%%\n', SOC_initial - SOC_estimated(end));
