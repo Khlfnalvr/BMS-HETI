@@ -309,56 +309,55 @@ function [results] = SoC_Kalman_Filter(data_file)
     results.stats_cc = stats_cc;
     results.stats_aukf = stats_aukf;
 
-    %% Plot Hasil
-    figure('Position', [100, 100, 1200, 900]);
+    %% Plot Hasil (4 Figure Terpisah)
 
-    % Subplot 1: SoC Comparison
-    subplot(4, 1, 1);
+    % Figure 1: SoC Comparison
+    figure('Position', [50, 600, 1000, 400], 'Name', 'AUKF - SoC Comparison');
     plot(time/60, true_soc, 'k-', 'LineWidth', 2.5, 'DisplayName', 'SoC Sebenarnya');
     hold on;
     plot(time/60, soc_aukf, 'r-', 'LineWidth', 1.8, 'DisplayName', 'AUKF (dengan OCV)');
-    plot(time/60, soc_cc, 'b--', 'LineWidth', 1.3, 'DisplayName', 'Prediksi CC (tanpa OCV)');
-    xlabel('Waktu (menit)', 'FontSize', 10);
-    ylabel('SoC (%)', 'FontSize', 10);
-    title('KALMAN FILTER (AUKF + OCV) - Perbandingan SoC', 'FontSize', 12, 'FontWeight', 'bold');
-    legend('Location', 'best', 'FontSize', 9);
+    plot(time/60, soc_cc, 'b--', 'LineWidth', 1.5, 'DisplayName', 'Prediksi CC (tanpa OCV)');
+    xlabel('Waktu (menit)', 'FontSize', 11);
+    ylabel('SoC (%)', 'FontSize', 11);
+    title('KALMAN FILTER (AUKF + OCV) - Perbandingan SoC', 'FontSize', 13, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 10);
     grid on;
     ylim([0 100]);
 
-    % Subplot 2: Error
-    subplot(4, 1, 2);
-    plot(time/60, error_aukf, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Error AUKF');
+    % Figure 2: Error
+    figure('Position', [50, 150, 1000, 400], 'Name', 'AUKF - Error');
+    plot(time/60, error_aukf, 'r-', 'LineWidth', 1.8, 'DisplayName', 'Error AUKF');
     hold on;
     yline(0, 'k--', 'LineWidth', 1);
-    yline(stats_aukf.mean_error, 'r--', 'LineWidth', 1, 'DisplayName', sprintf('Mean: %+.3f%%', stats_aukf.mean_error));
-    xlabel('Waktu (menit)', 'FontSize', 10);
-    ylabel('Error (%)', 'FontSize', 10);
-    title('Error Estimasi AUKF', 'FontSize', 11, 'FontWeight', 'bold');
-    legend('Location', 'best', 'FontSize', 9);
+    yline(stats_aukf.mean_error, 'r--', 'LineWidth', 1.5, 'DisplayName', sprintf('Mean: %+.3f%%', stats_aukf.mean_error));
+    xlabel('Waktu (menit)', 'FontSize', 11);
+    ylabel('Error (%)', 'FontSize', 11);
+    title('KALMAN FILTER - Error Estimasi AUKF', 'FontSize', 13, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 10);
     grid on;
 
-    % Subplot 3: Arus
-    subplot(4, 1, 3);
-    plot(time/60, current, 'b-', 'LineWidth', 1.5);
-    xlabel('Waktu (menit)', 'FontSize', 10);
-    ylabel('Arus (A)', 'FontSize', 10);
-    title('Profil Arus Discharge', 'FontSize', 11, 'FontWeight', 'bold');
+    % Figure 3: Arus
+    figure('Position', [1100, 600, 1000, 400], 'Name', 'AUKF - Current Profile');
+    plot(time/60, current, 'b-', 'LineWidth', 1.8);
+    xlabel('Waktu (menit)', 'FontSize', 11);
+    ylabel('Arus (A)', 'FontSize', 11);
+    title('KALMAN FILTER - Profil Arus Discharge', 'FontSize', 13, 'FontWeight', 'bold');
     grid on;
 
-    % Subplot 4: Tegangan dan Innovation
-    subplot(4, 1, 4);
+    % Figure 4: Tegangan dan Innovation
+    figure('Position', [1100, 150, 1000, 400], 'Name', 'AUKF - Voltage and Innovation');
     yyaxis left;
-    plot(time/60, voltage, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Measured');
+    plot(time/60, voltage, 'k-', 'LineWidth', 1.8, 'DisplayName', 'Measured');
     hold on;
-    plot(time/60, v_predicted, 'r--', 'LineWidth', 1.3, 'DisplayName', 'Predicted (OCV-based)');
-    ylabel('Tegangan (V)', 'FontSize', 10);
+    plot(time/60, v_predicted, 'r--', 'LineWidth', 1.5, 'DisplayName', 'Predicted (OCV-based)');
+    ylabel('Tegangan (V)', 'FontSize', 11);
     yyaxis right;
-    plot(time/60, innovation*1000, 'm-', 'LineWidth', 1.0, 'DisplayName', 'Innovation');
+    plot(time/60, innovation*1000, 'm-', 'LineWidth', 1.2, 'DisplayName', 'Innovation');
     yline(0, 'k:', 'LineWidth', 0.5);
-    ylabel('Innovation (mV)', 'FontSize', 10);
-    xlabel('Waktu (menit)', 'FontSize', 10);
-    title('Tegangan Terminal dan Innovation', 'FontSize', 11, 'FontWeight', 'bold');
-    legend('Location', 'best', 'FontSize', 9);
+    ylabel('Innovation (mV)', 'FontSize', 11);
+    xlabel('Waktu (menit)', 'FontSize', 11);
+    title('KALMAN FILTER - Tegangan Terminal dan Innovation', 'FontSize', 13, 'FontWeight', 'bold');
+    legend('Location', 'best', 'FontSize', 10);
     grid on;
 
     fprintf('Plot telah dibuat.\n');

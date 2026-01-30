@@ -85,11 +85,20 @@ Script ini akan:
 
 Kedua metode sekarang menghasilkan output dengan format yang **KONSISTEN** untuk memudahkan perbandingan:
 
-#### Plot (4 Subplot untuk Kedua Metode)
-1. **Subplot 1:** Perbandingan SoC (True vs Estimated)
-2. **Subplot 2:** Error Estimasi
-3. **Subplot 3:** Profil Arus Discharge
-4. **Subplot 4:** Tegangan Terminal (+ Innovation untuk AUKF)
+#### Plot (4 Figure Terpisah untuk Kedua Metode)
+
+**Setiap metode menghasilkan 4 figure window terpisah agar lebih besar dan jelas:**
+
+1. **Figure 1:** Perbandingan SoC (True vs Estimated)
+2. **Figure 2:** Error Estimasi
+3. **Figure 3:** Profil Arus Discharge
+4. **Figure 4:** Tegangan Terminal (+ Innovation untuk AUKF)
+
+**Keuntungan 4 figure terpisah:**
+- ✅ Ukuran plot lebih besar dan jelas
+- ✅ Mudah difokuskan pada 1 aspek
+- ✅ Dapat di-zoom dan di-save secara individual
+- ✅ Tidak kecil-kecil seperti subplot
 
 #### File CSV
 
