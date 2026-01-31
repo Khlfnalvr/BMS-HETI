@@ -481,61 +481,8 @@ if warmup_samples > 0 && warmup_samples < N
 else
     voltage_RMSE_full = sqrt(mean(voltage_error.^2));
     voltage_RMSE_warmup = voltage_RMSE_full;
-    idx_valid = 1:N;
     fprintf('  -> Voltage RMSE: %.4f V\n', voltage_RMSE_full);
 end
-
-%% ==========================================================================
-%  HITUNG SOC REFERENCE (dari Voltage + OCV Curve)
-%  ==========================================================================
-%  CATATAN PENTING:
-%  - SOC Reference dihitung dari: OCV_est = V_terminal + R_o * I
-%  - Kemudian lookup SOC dari kurva OCV
-%  - INI BUKAN SOC AKTUAL SEBENARNYA karena:
-%    1. Mengabaikan V_tr (transient voltage)
-%    2. Hanya akurat saat arus rendah/nol (rest period)
-%    3. Bergantung pada akurasi R_o dan kurva OCV
-%  - Gunakan sebagai REFERENSI KASAR untuk perbandingan
-%  ==========================================================================
-
-fprintf('\n--- Menghitung SOC Reference (dari OCV) ---\n');
-
-% Hitung SOC reference untuk setiap titik waktu
-SOC_reference = zeros(N, 1);
-OCV_estimated_ref = zeros(N, 1);
-
-for k = 1:N
-    % Kompensasi resistansi: OCV = V_terminal + R_o * I (discharge: I positif)
-    OCV_estimated_ref(k) = voltage_measured(k) + R_o_default * current_data(k);
-
-    % Lookup SOC dari OCV
-    SOC_reference(k) = lookup_soc_from_ocv(OCV_estimated_ref(k));
-
-    % Clamp ke range valid
-    SOC_reference(k) = max(0, min(100, SOC_reference(k)));
-end
-
-% Hitung error SOC (AUKF vs reference)
-SOC_error_aukf = SOC_estimated - SOC_reference;
-SOC_error_cc = SOC_cc_only - SOC_reference;
-
-% Hitung statistik (dengan warmup jika ada)
-if warmup_samples > 0 && warmup_samples < N
-    SOC_RMSE_aukf = sqrt(mean(SOC_error_aukf(idx_valid).^2));
-    SOC_MAE_aukf = mean(abs(SOC_error_aukf(idx_valid)));
-    SOC_RMSE_cc = sqrt(mean(SOC_error_cc(idx_valid).^2));
-    SOC_MAE_cc = mean(abs(SOC_error_cc(idx_valid)));
-else
-    SOC_RMSE_aukf = sqrt(mean(SOC_error_aukf.^2));
-    SOC_MAE_aukf = mean(abs(SOC_error_aukf));
-    SOC_RMSE_cc = sqrt(mean(SOC_error_cc.^2));
-    SOC_MAE_cc = mean(abs(SOC_error_cc));
-end
-
-fprintf('  -> SOC Reference akhir: %.2f%%\n', SOC_reference(end));
-fprintf('  -> SOC Error AUKF vs Ref (RMSE): %.2f%%\n', SOC_RMSE_aukf);
-fprintf('  -> SOC Error CC vs Ref (RMSE): %.2f%%\n', SOC_RMSE_cc);
-fprintf('  CATATAN: SOC Reference hanya akurat saat arus rendah/nol!\n');
 
 %% ==========================================================================
 %  OUTPUT - GRAFIK (Figure Terpisah)
@@ -543,16 +490,15 @@ fprintf('  CATATAN: SOC Reference hanya akurat saat arus rendah/nol!\n');
 
 fprintf('\n--- Membuat Grafik ---\n');
 
-% --- Figure 1: SOC vs Time (dengan Reference) ---
+% --- Figure 1: SOC vs Time ---
 figure('Name', 'Kalman Filter - SOC vs Time', 'NumberTitle', 'off');
 plot(time_data, SOC_estimated, 'b-', 'LineWidth', 1.5, 'DisplayName', 'SOC (AUKF)');
 hold on;
-plot(time_data, SOC_cc_only, 'g--', 'LineWidth', 1.0, 'DisplayName', 'SOC (CC Only)');
-plot(time_data, SOC_reference, 'r:', 'LineWidth', 1.0, 'DisplayName', 'SOC Reference (OCV)');
+plot(time_data, SOC_cc_only, 'r--', 'LineWidth', 1.0, 'DisplayName', 'SOC (CC Only)');
 hold off;
 xlabel('Time (s)');
 ylabel('State of Charge (%)');
-title('Kalman Filter: SOC Estimation vs Reference');
+title('Kalman Filter: SOC Estimation vs Time');
 grid on;
 ylim([0 105]);
 legend('Location', 'best');
@@ -608,19 +554,6 @@ title('Kalman Filter: Kalman Gain for SOC');
 grid on;
 legend('K_{SOC}', 'Location', 'best');
 
-% --- Figure 7: SOC Error vs Time (Estimated - Reference) ---
-figure('Name', 'Kalman Filter - SOC Error vs Time', 'NumberTitle', 'off');
-plot(time_data, SOC_error_aukf, 'b-', 'LineWidth', 1.0, 'DisplayName', 'SOC Error (AUKF - Ref)');
-hold on;
-plot(time_data, SOC_error_cc, 'r--', 'LineWidth', 1.0, 'DisplayName', 'SOC Error (CC - Ref)');
-plot([time_data(1), time_data(end)], [0, 0], 'k--', 'LineWidth', 0.5, 'HandleVisibility', 'off');
-hold off;
-xlabel('Time (s)');
-ylabel('SOC Error (%)');
-title('Kalman Filter: SOC Error vs Reference (OCV)');
-grid on;
-legend('Location', 'best');
-
 %% ==========================================================================
 %  SAVE RESULTS
 %  ==========================================================================
@@ -632,10 +565,6 @@ results.algorithm = 'Adaptive Unscented Kalman Filter';
 results.time_data = time_data;
 results.SOC_estimated = SOC_estimated;
 results.SOC_cc_only = SOC_cc_only;
-results.SOC_reference = SOC_reference;
-results.SOC_error_aukf = SOC_error_aukf;
-results.SOC_error_cc = SOC_error_cc;
-results.OCV_estimated_ref = OCV_estimated_ref;
 results.V_tr_estimated = V_tr_estimated;
 results.voltage_measured = voltage_measured;
 results.voltage_predicted = voltage_predicted;
@@ -665,11 +594,6 @@ results.parameters.time_end = t_end;
 % Statistik
 results.statistics.SOC_final_AUKF = SOC_estimated(end);
 results.statistics.SOC_final_CC = SOC_cc_only(end);
-results.statistics.SOC_final_reference = SOC_reference(end);
-results.statistics.SOC_RMSE_aukf = SOC_RMSE_aukf;
-results.statistics.SOC_MAE_aukf = SOC_MAE_aukf;
-results.statistics.SOC_RMSE_cc = SOC_RMSE_cc;
-results.statistics.SOC_MAE_cc = SOC_MAE_cc;
 results.statistics.voltage_RMSE_full = voltage_RMSE_full;
 results.statistics.voltage_RMSE_after_warmup = voltage_RMSE_warmup;
 results.statistics.warmup_samples = warmup_samples;
@@ -703,32 +627,22 @@ fprintf('Duration:           %.2f hours\n', (t_end - t_start)/3600);
 fprintf('Data Points:        %d samples\n', length(time_data));
 fprintf('Warmup Samples:     %d\n', warmup_samples);
 fprintf('----------------------------------------\n');
-fprintf('SOC Awal:              %.2f%%\n', SOC_initial);
-fprintf('SOC Akhir (AUKF):      %.2f%%\n', SOC_estimated(end));
-fprintf('SOC Akhir (CC):        %.2f%%\n', SOC_cc_only(end));
-fprintf('SOC Akhir (Ref OCV):   %.2f%%\n', SOC_reference(end));
+fprintf('SOC Awal:           %.2f%%\n', SOC_initial);
+fprintf('SOC Akhir (AUKF):   %.2f%%\n', SOC_estimated(end));
+fprintf('SOC Akhir (CC):     %.2f%%\n', SOC_cc_only(end));
+fprintf('Perbedaan:          %.2f%%\n', abs(SOC_estimated(end) - SOC_cc_only(end)));
 fprintf('----------------------------------------\n');
-fprintf('PERBANDINGAN dengan SOC Reference (OCV):\n');
-fprintf('  AUKF vs Ref RMSE:  %.2f%%\n', SOC_RMSE_aukf);
-fprintf('  AUKF vs Ref MAE:   %.2f%%\n', SOC_MAE_aukf);
-fprintf('  CC vs Ref RMSE:    %.2f%%\n', SOC_RMSE_cc);
-fprintf('  CC vs Ref MAE:     %.2f%%\n', SOC_MAE_cc);
-fprintf('----------------------------------------\n');
-fprintf('AKURASI VOLTAGE:\n');
-fprintf('  Voltage RMSE:      %.4f V\n', voltage_RMSE_full);
-fprintf('  Voltage MAE:       %.4f V\n', results.statistics.voltage_MAE_full);
+fprintf('AKURASI (full data):\n');
+fprintf('  Voltage RMSE:     %.4f V\n', voltage_RMSE_full);
+fprintf('  Voltage MAE:      %.4f V\n', results.statistics.voltage_MAE_full);
 if warmup_samples > 0 && warmup_samples < N
-    fprintf('  (setelah warmup):\n');
-    fprintf('  Voltage RMSE:      %.4f V\n', voltage_RMSE_warmup);
+    fprintf('AKURASI (setelah warmup):\n');
+    fprintf('  Voltage RMSE:     %.4f V\n', voltage_RMSE_warmup);
+    fprintf('  Voltage MAE:      %.4f V\n', results.statistics.voltage_MAE_after_warmup);
 end
 fprintf('----------------------------------------\n');
-fprintf('Innovation Mean:     %.4f V\n', results.statistics.innovation_mean);
-fprintf('Innovation Std:      %.4f V\n', results.statistics.innovation_std);
-fprintf('========================================\n');
-fprintf('\nCATATAN PENTING:\n');
-fprintf('1. SOC Reference (OCV) BUKAN nilai aktual!\n');
-fprintf('   Hanya akurat saat arus rendah/nol.\n');
-fprintf('2. Gunakan sebagai referensi kasar saja.\n');
+fprintf('Innovation Mean:    %.4f V\n', results.statistics.innovation_mean);
+fprintf('Innovation Std:     %.4f V\n', results.statistics.innovation_std);
 fprintf('========================================\n');
 fprintf('\nTIPS JIKA HASIL TIDAK AKURAT:\n');
 fprintf('1. Sesuaikan kurva OCV dengan baterai Anda\n');
