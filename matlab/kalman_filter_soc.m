@@ -32,17 +32,17 @@ clear; clc; close all;
 %  PARAMETER KONFIGURASI (Ubah sesuai kebutuhan)
 %  ==========================================================================
 
-% --- Parameter Baterai ---
-Q_nominal = 2.6;        % Kapasitas nominal baterai (Ah)
+% --- Parameter Baterai (sesuai paper Braun et al. 2022) ---
+Q_nominal = 19.96;      % Kapasitas nominal baterai (Ah)
 eta = 1.0;              % Efisiensi Coulomb (1.0 = 100%)
-SOC_initial = 100;      % SOC awal (%) - sesuaikan dengan kondisi eksperimen
-                        % Set ke [] untuk auto-estimasi dari voltage awal
+SOC_initial = 50;       % SOC awal (%) - sesuaikan atau set [] untuk auto
 
-% --- Parameter Model RC (default dari kode C, untuk 25°C) ---
-% PENTING: Sesuaikan nilai ini dengan baterai Anda untuk hasil lebih akurat
-R_o_default = 0.052;    % Series resistance (Ohm)
-R_tr_default = 0.008;   % Transient resistance (Ohm)
-tau_default = 130;      % Time constant (seconds)
+% --- Parameter Model RC (sesuai paper Braun et al. 2022) ---
+% Model RC dinamis: R1 = R1a * |I| + R1b
+Rs = 0.001;             % Serial resistance [Ohm]
+R1a = 4.667e-05;        % RC resistance component [Ohm/A]
+R1b = 0.001767;         % RC resistance base [Ohm]
+C1 = 10.536;            % Kapasitansi RC [F]
 
 % --- Parameter UKF ---
 alpha = 1.0;            % Spread of sigma points (0.001 to 1)
@@ -184,10 +184,11 @@ lookup_ocv = @(soc) interp1(SOC_ocv, V0_ocv, soc, 'linear', 'extrap');
 % Fungsi INVERSE: lookup SOC dari OCV (untuk auto-estimasi SOC awal)
 lookup_soc_from_ocv = @(ocv) interp1(V0_ocv, SOC_ocv, ocv, 'linear', 'extrap');
 
-% Fungsi lookup parameter RC (simplified - bisa diperluas dengan lookup table)
-get_Ro = @(soc, temp) R_o_default;
-get_Rtr = @(soc, temp) R_tr_default;
-get_tau = @(soc, temp) tau_default;
+% Fungsi lookup parameter RC (model dinamis sesuai paper Braun et al. 2022)
+% R1 = R1a * |I| + R1b (tergantung arus)
+get_Ro = @(soc, temp) Rs;              % Serial resistance konstan
+get_R1 = @(I) R1a * abs(I) + R1b;      % RC resistance tergantung arus
+get_tau = @(I) get_R1(I) * C1;         % Time constant dinamis
 
 %% ==========================================================================
 %  AUTO-ESTIMATE INITIAL SOC (jika tidak ditentukan)
@@ -199,7 +200,7 @@ if isempty(SOC_initial)
     I_first = current_data(1);
 
     % Kompensasi resistansi: OCV = V_terminal + R_o * I
-    OCV_estimated = V_first + R_o_default * I_first;
+    OCV_estimated = V_first + Rs * I_first;
 
     % Lookup SOC dari OCV
     SOC_initial = lookup_soc_from_ocv(OCV_estimated);
@@ -280,10 +281,10 @@ for k = 2:N
     dt_k = dt(k);
     V_meas = voltage_measured(k);
 
-    % Get battery parameters
+    % Get battery parameters (model dinamis sesuai paper)
     R_o = get_Ro(x(1), T_k);
-    R_tr = get_Rtr(x(1), T_k);
-    tau = get_tau(x(1), T_k);
+    R1 = get_R1(I_k);              % RC resistance tergantung arus
+    tau = get_tau(I_k);            % Time constant dinamis
 
     % ========================================
     % STEP 1: Coulomb Counting Prediction
@@ -334,7 +335,7 @@ for k = 2:N
         soc_new = max(0, min(100, soc_new));
 
         exp_factor = exp(-dt_k / tau);
-        vtr_new = vtr_i * exp_factor + R_tr * (1 - exp_factor) * I_k;
+        vtr_new = vtr_i * exp_factor + R1 * (1 - exp_factor) * I_k;
 
         sigma_pred(:, i) = [soc_new; vtr_new];
     end
@@ -575,13 +576,14 @@ results.kalman_gain_soc = K_gain_soc;
 results.current_data = current_data;
 results.temperature_data = temperature_data;
 
-% Parameter yang digunakan
+% Parameter yang digunakan (sesuai paper Braun et al. 2022)
 results.parameters.Q_nominal = Q_nominal;
 results.parameters.eta = eta;
 results.parameters.SOC_initial = SOC_initial;
-results.parameters.R_o = R_o_default;
-results.parameters.R_tr = R_tr_default;
-results.parameters.tau = tau_default;
+results.parameters.Rs = Rs;
+results.parameters.R1a = R1a;
+results.parameters.R1b = R1b;
+results.parameters.C1 = C1;
 results.parameters.UKF.alpha = alpha;
 results.parameters.UKF.beta = beta;
 results.parameters.UKF.kappa = kappa;

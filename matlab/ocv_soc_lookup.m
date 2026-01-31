@@ -29,10 +29,10 @@ clear; clc; close all;
 %  PARAMETER KONFIGURASI (Ubah sesuai kebutuhan)
 %  ==========================================================================
 
-% --- Parameter untuk Kompensasi Resistansi ---
+% --- Parameter untuk Kompensasi Resistansi (sesuai paper Braun et al. 2022) ---
 % OCV = V_terminal + R_o * I
 % Set ke 0 untuk tidak kompensasi (langsung pakai V_terminal sebagai OCV)
-R_o_compensation = 0.05;  % Series resistance untuk kompensasi (Ohm)
+R_o_compensation = 0.001;  % Serial resistance [Ohm] - Rs dari paper
 
 % --- Path File Data ---
 ocv_file = '../OCV_vs_SOC_curve.csv';

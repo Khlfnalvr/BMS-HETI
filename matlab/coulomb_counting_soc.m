@@ -22,10 +22,16 @@ clear; clc; close all;
 %  PARAMETER KONFIGURASI (Ubah sesuai kebutuhan)
 %  ==========================================================================
 
-% --- Parameter Baterai ---
-Q_nominal = 2.6;        % Kapasitas nominal baterai (Ah)
+% --- Parameter Baterai (sesuai paper Braun et al. 2022) ---
+Q_nominal = 19.96;      % Kapasitas nominal baterai (Ah)
 eta = 1.0;              % Efisiensi Coulomb (1.0 = 100%)
-SOC_initial = 100;      % SOC awal (%) - sesuaikan dengan kondisi eksperimen
+SOC_initial = 0;        % SOC awal (%) - eksperimen mulai dari empty
+
+% --- Parameter Kalibrasi Voltage (untuk reset error akumulasi) ---
+enable_voltage_calibration = true;  % Enable kalibrasi saat V boundary
+V_upper_cal = 4.19;     % Voltage untuk kalibrasi SOC = 100%
+V_lower_cal = 3.01;     % Voltage untuk kalibrasi SOC = 0%
+I_threshold_cal = 4.0;  % Threshold arus untuk kalibrasi (A)
 
 % --- Path File Data ---
 % Sesuaikan path jika file CSV tidak di folder parent
@@ -155,8 +161,17 @@ for k = 2:N
     % Update SOC (kurangi karena arus positif = discharge)
     SOC_estimated(k) = SOC_estimated(k-1) - delta_SOC;
 
-    % Clamp SOC ke range [0, 100]
-    SOC_estimated(k) = max(0, min(100, SOC_estimated(k)));
+    % Kalibrasi saat voltage boundary (sesuai paper Braun et al. 2022)
+    if enable_voltage_calibration
+        if (voltage_measured(k) > V_upper_cal && abs(current_data(k)) < I_threshold_cal) || SOC_estimated(k) > 100
+            SOC_estimated(k) = 100;
+        elseif (voltage_measured(k) < V_lower_cal && abs(current_data(k)) < I_threshold_cal) || SOC_estimated(k) < 0
+            SOC_estimated(k) = 0;
+        end
+    else
+        % Clamp SOC ke range [0, 100]
+        SOC_estimated(k) = max(0, min(100, SOC_estimated(k)));
+    end
 
     % Hitung total Ah
     total_Ah = total_Ah + (current_data(k) * dt(k)) / 3600;
