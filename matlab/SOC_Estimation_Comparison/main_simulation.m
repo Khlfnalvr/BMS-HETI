@@ -15,8 +15,8 @@
 %  Baterai: Li-ion NMC 21700 (konfigurasi 20S, 72V nominal)
 %
 %  INSTRUKSI:
-%    1. Letakkan file CSV di folder yang sama dengan script ini
-%    2. Sesuaikan nama file CSV di bagian KONFIGURASI di bawah
+%    1. Set use_synthetic_data = true/false sesuai kebutuhan
+%    2. Jika pakai CSV: letakkan file di folder parent, sesuaikan nama
 %    3. Sesuaikan parameter baterai jika diperlukan
 %    4. Jalankan script ini: >> main_simulation
 %
@@ -34,15 +34,27 @@ fprintf('============================================================\n\n');
 %  KONFIGURASI - Ubah parameter di sini sesuai kebutuhan
 %  ==========================================================================
 
-% --- Path File CSV ---
-% Ganti nama file di sini jika file CSV Anda berbeda
+% --- Pilih Sumber Data ---
+% true  = gunakan data SINTETIK (rekomendasi untuk demonstrasi ECC)
+%         Data sintetik memiliki rest periods antar siklus,
+%         variasi C-rate, dan ground truth yang diketahui persis.
+%
+% false = gunakan data CSV EKSPERIMEN
+%         PERINGATAN: Data eksperimen ini memiliki 78% waktu di arus >10A,
+%         hanya 1 rest period dalam 100 jam, dan SOC clamped 56% waktu.
+%         Kondisi ini TIDAK memungkinkan ECC menunjukkan keunggulannya.
+use_synthetic_data = true;
+
+% --- Path File CSV (hanya dipakai jika use_synthetic_data = false) ---
 ocv_csv_file = '../OCV_vs_SOC_curve_p.csv';    % OCV-SOC lookup table
 ts_csv_file  = '../Experimental_data_fresh_cell.csv';  % Time-series data
 
 % --- Parameter Baterai ---
-% Sesuaikan dengan spesifikasi sel 21700 yang dipakai
+% Ini adalah parameter NOMINAL yang diketahui estimator.
+% Untuk data sintetik, parameter SEBENARNYA sedikit berbeda
+% (C_true=4.85 Ah, Rb_true=0.008 Ohm) untuk menguji adaptasi ECC.
 C_nom = 5.0;          % Kapasitas nominal (Ah) - default sel 21700
-Rb_init = 0.025;      % Internal resistance awal (Ohm)
+Rb_init = 0.025;      % Internal resistance awal (Ohm) - sengaja lebih besar
 eta_init = 0.998;     % Coulombic efficiency awal (0-1)
 
 % --- Parameter Simulasi ---
@@ -58,45 +70,84 @@ current_positive_discharge = true;
 % --- Deteksi Siklus ---
 min_cycle_duration = 30;  % Durasi minimum transisi siklus (detik)
 
-% --- Time Range Selection (opsional) ---
+% --- Time Range Selection (opsional, hanya untuk data CSV) ---
 % Set ke [] untuk menggunakan seluruh data
-% Contoh: time_start = 0; time_end = 36000; untuk 10 jam pertama
 time_start = [];  % Waktu mulai (detik), [] = dari awal
 time_end = [];    % Waktu akhir (detik), [] = sampai akhir
 
 %% ==========================================================================
-%  STEP 1: Load Data dari CSV
+%  STEP 1: Load Data
 %  ==========================================================================
-fprintf('STEP 1: Loading data dari CSV...\n');
+fprintf('STEP 1: Loading data...\n');
 fprintf('------------------------------------------------------------\n');
 
-data = load_data(ocv_csv_file, ts_csv_file);
+if use_synthetic_data
+    % ==================================================================
+    %  MODE SINTETIK: Generate data dengan rest periods dan variasi C-rate
+    % ==================================================================
+    fprintf('  -> Mode: DATA SINTETIK (rekomendasi untuk demonstrasi ECC)\n\n');
 
-% Ekstrak data untuk kemudahan akses
-time = data.timeseries.Time;
-current = data.timeseries.Current;
-voltage = data.timeseries.Voltage;
-temperature = data.timeseries.Temperature;
+    % Load OCV table dulu dari CSV (ini tetap dipakai)
+    ocv_data_raw = load_data(ocv_csv_file, ts_csv_file);
+    ocv_table = ocv_data_raw.ocv_table;
 
-% Sesuaikan konvensi arus jika perlu
-if ~current_positive_discharge
-    current = -current;
-    fprintf('  -> Konvensi arus dibalik (positif = charge)\n');
-end
+    % Parameter data sintetik
+    synth_params.C_true = 4.85;      % Kapasitas sebenarnya (sedikit < C_nom)
+    synth_params.Rb_true = 0.008;    % Rb sebenarnya (lebih kecil dari Rb_init)
+    synth_params.SOC_start = 0.80;   % Mulai dari 80%
+    synth_params.I_noise_std = 0.05; % Noise sensor arus (50mA std)
+    synth_params.V_noise_std = 0.003;% Noise sensor tegangan (3mV std)
 
-% Apply time range filter jika ditentukan
-if ~isempty(time_start) || ~isempty(time_end)
-    if isempty(time_start), time_start = time(1); end
-    if isempty(time_end), time_end = time(end); end
+    % Generate data
+    [data, ground_truth_synth] = generate_synthetic_data(ocv_table, synth_params);
 
-    idx_range = (time >= time_start) & (time <= time_end);
-    time = time(idx_range);
-    current = current(idx_range);
-    voltage = voltage(idx_range);
-    temperature = temperature(idx_range);
+    % Ekstrak data
+    time = data.timeseries.Time;
+    current = data.timeseries.Current;
+    voltage = data.timeseries.Voltage;
+    temperature = data.timeseries.Temperature;
 
-    fprintf('  -> Time range filter applied: %.0f s to %.0f s\n', time_start, time_end);
-    fprintf('  -> Samples setelah filter: %d\n', length(time));
+    fprintf('  -> C_nom (estimator tahu): %.3f Ah\n', C_nom);
+    fprintf('  -> C_true (sebenarnya):    %.3f Ah (perbedaan %.1f%%)\n', ...
+        synth_params.C_true, abs(C_nom - synth_params.C_true)/C_nom*100);
+    fprintf('  -> Rb_init (estimator):    %.4f Ohm\n', Rb_init);
+    fprintf('  -> Rb_true (sebenarnya):   %.4f Ohm\n\n', synth_params.Rb_true);
+
+else
+    % ==================================================================
+    %  MODE CSV: Load data dari file eksperimen
+    % ==================================================================
+    fprintf('  -> Mode: DATA CSV EKSPERIMEN\n');
+    fprintf('  -> PERINGATAN: Data ini kurang ideal untuk demonstrasi ECC\n');
+    fprintf('     (78%% waktu di arus tinggi, hanya 1 rest period)\n\n');
+
+    data = load_data(ocv_csv_file, ts_csv_file);
+
+    % Ekstrak data
+    time = data.timeseries.Time;
+    current = data.timeseries.Current;
+    voltage = data.timeseries.Voltage;
+    temperature = data.timeseries.Temperature;
+
+    % Sesuaikan konvensi arus jika perlu
+    if ~current_positive_discharge
+        current = -current;
+        fprintf('  -> Konvensi arus dibalik (positif = charge)\n');
+    end
+
+    % Apply time range filter
+    if ~isempty(time_start) || ~isempty(time_end)
+        if isempty(time_start), time_start = time(1); end
+        if isempty(time_end), time_end = time(end); end
+
+        idx_range = (time >= time_start) & (time <= time_end);
+        time = time(idx_range);
+        current = current(idx_range);
+        voltage = voltage(idx_range);
+        temperature = temperature(idx_range);
+
+        fprintf('  -> Time range filter: %.0f s to %.0f s\n', time_start, time_end);
+    end
 end
 
 N = length(time);
@@ -104,91 +155,91 @@ fprintf('  -> Total data points: %d\n', N);
 fprintf('  -> Duration: %.2f jam\n\n', (time(end) - time(1)) / 3600);
 
 %% ==========================================================================
-%  STEP 2: Tentukan SOC Awal dari OCV Lookup
+%  STEP 2: Tentukan SOC Awal dan Ground Truth
 %  ==========================================================================
-fprintf('STEP 2: Menentukan SOC awal...\n');
+fprintf('STEP 2: Menentukan SOC awal dan ground truth...\n');
 fprintf('------------------------------------------------------------\n');
 
-% Estimasi OCV awal: kompensasi drop tegangan karena arus
-V_first = voltage(1);
-I_first = current(1);
+if use_synthetic_data
+    % ============================================================
+    %  Sintetik: ground truth diketahui persis
+    % ============================================================
+    SOC_true = ground_truth_synth.SOC_true;
+    SOC_0_true = SOC_true(1);
 
-if I_first > 0
-    % Discharge: V_terminal < OCV -> OCV = V + I * Rb
-    OCV_initial = V_first + abs(I_first) * Rb_init;
-elseif I_first < 0
-    % Charge: V_terminal > OCV -> OCV = V - |I| * Rb
-    OCV_initial = V_first - abs(I_first) * Rb_init;
+    fprintf('  -> Ground truth: EXACT (dari model sintetik)\n');
+    fprintf('  -> SOC awal (true): %.2f%%\n', SOC_0_true * 100);
 else
-    % Rest: V_terminal ≈ OCV
-    OCV_initial = V_first;
+    % ============================================================
+    %  CSV: estimasi SOC awal dari OCV lookup, ground truth via CC ideal
+    % ============================================================
+    V_first = voltage(1);
+    I_first = current(1);
+
+    if I_first > 0
+        OCV_initial = V_first + abs(I_first) * Rb_init;
+    elseif I_first < 0
+        OCV_initial = V_first - abs(I_first) * Rb_init;
+    else
+        OCV_initial = V_first;
+    end
+
+    SOC_initial_pct = ocv_soc_lookup(data.ocv_table, OCV_initial, 'ocv2soc');
+    SOC_0_true = SOC_initial_pct / 100;
+    SOC_0_true = max(0, min(1, SOC_0_true));
+
+    fprintf('  -> Ground truth: Coulomb Counting ideal (dari data CSV)\n');
+    fprintf('  -> Voltage pertama: %.4f V, Arus pertama: %.4f A\n', V_first, I_first);
+    fprintf('  -> SOC awal (true): %.2f%%\n', SOC_0_true * 100);
+
+    SOC_true = calc_true_soc(time, current, SOC_0_true, C_nom);
 end
-
-% Lookup SOC dari OCV yang dikompensasi
-SOC_initial_pct = ocv_soc_lookup(data.ocv_table, OCV_initial, 'ocv2soc');
-SOC_0_true = SOC_initial_pct / 100;  % Konversi ke fraksi (0-1)
-SOC_0_true = max(0, min(1, SOC_0_true));
-
-fprintf('  -> Voltage pertama: %.4f V\n', V_first);
-fprintf('  -> Arus pertama: %.4f A\n', I_first);
-fprintf('  -> OCV estimasi (kompensasi Rb): %.4f V\n', OCV_initial);
-fprintf('  -> SOC awal (true): %.2f%%\n', SOC_0_true * 100);
 
 % SOC awal untuk CCM (dengan error +5%)
 SOC_0_ccm = SOC_0_true + ccm_initial_error;
 SOC_0_ccm = max(0, min(1, SOC_0_ccm));
-fprintf('  -> SOC awal CCM (dengan +%.0f%% error): %.2f%%\n', ccm_initial_error*100, SOC_0_ccm*100);
+fprintf('  -> SOC awal CCM (+%.0f%% error): %.2f%%\n', ccm_initial_error*100, SOC_0_ccm*100);
 
-% SOC awal untuk ECC (sama dengan CCM sebelum koreksi, akan dikoreksi oleh ECC)
-SOC_0_ecc = SOC_0_ccm;  % ECC akan mengoreksi ini di awal siklus pertama
-fprintf('  -> SOC awal ECC (sebelum koreksi): %.2f%%\n\n', SOC_0_ecc*100);
-
-%% ==========================================================================
-%  STEP 3: Hitung Ground Truth SOC
-%  ==========================================================================
-fprintf('STEP 3: Menghitung ground truth SOC...\n');
-fprintf('------------------------------------------------------------\n');
-
-SOC_true = calc_true_soc(time, current, SOC_0_true, C_nom);
-
-fprintf('  -> SOC true awal: %.2f%%\n', SOC_true(1)*100);
+% SOC awal untuk ECC (sama error, akan dikoreksi oleh ECC)
+SOC_0_ecc = SOC_0_ccm;
+fprintf('  -> SOC awal ECC (sebelum koreksi): %.2f%%\n', SOC_0_ecc*100);
 fprintf('  -> SOC true akhir: %.2f%%\n', SOC_true(end)*100);
 fprintf('  -> Delta SOC: %.2f%%\n\n', (SOC_true(end) - SOC_true(1))*100);
 
 %% ==========================================================================
-%  STEP 4: Deteksi Siklus Charge/Discharge (untuk ECC)
+%  STEP 3: Deteksi Siklus Charge/Discharge (untuk ECC)
 %  ==========================================================================
-fprintf('STEP 4: Deteksi siklus charge/discharge...\n');
+fprintf('STEP 3: Deteksi siklus charge/discharge...\n');
 fprintf('------------------------------------------------------------\n');
 
 cycles = detect_cycles(time, current, min_cycle_duration);
 
 %% ==========================================================================
-%  STEP 5: Jalankan Ketiga Metode Estimasi SOC
+%  STEP 4: Jalankan Ketiga Metode Estimasi SOC
 %  ==========================================================================
-fprintf('STEP 5: Menjalankan estimasi SOC...\n');
+fprintf('STEP 4: Menjalankan estimasi SOC...\n');
 fprintf('============================================================\n\n');
 
-% --- 5a: Pure Coulomb Counting (CCM) ---
+% --- 4a: Pure Coulomb Counting (CCM) ---
 fprintf('--- [1/3] Pure Coulomb Counting (CCM) ---\n');
 SOC_ccm = ccm_estimator(time, current, SOC_0_ccm, C_nom, ccm_current_bias);
 fprintf('  -> SOC CCM awal: %.2f%%, akhir: %.2f%%\n\n', SOC_ccm(1)*100, SOC_ccm(end)*100);
 
-% --- 5b: Pure OCV Method ---
+% --- 4b: Pure OCV Method ---
 fprintf('--- [2/3] Pure OCV Method ---\n');
 SOC_ocv = ocv_estimator(voltage, data.ocv_table);
 fprintf('  -> SOC OCV awal: %.2f%%, akhir: %.2f%%\n\n', SOC_ocv(1)*100, SOC_ocv(end)*100);
 
-% --- 5c: Enhanced Coulomb Counting (ECC) ---
+% --- 4c: Enhanced Coulomb Counting (ECC) ---
 fprintf('--- [3/3] Enhanced Coulomb Counting (ECC - Lee & Won) ---\n');
 [SOC_ecc, params_history] = ecc_estimator(time, current, voltage, ...
     data.ocv_table, cycles, SOC_0_ecc, C_nom, Rb_init, eta_init);
 fprintf('  -> SOC ECC awal: %.2f%%, akhir: %.2f%%\n\n', SOC_ecc(1)*100, SOC_ecc(end)*100);
 
 %% ==========================================================================
-%  STEP 6: Hitung Metrik Perbandingan
+%  STEP 5: Hitung Metrik Perbandingan
 %  ==========================================================================
-fprintf('STEP 6: Menghitung metrik perbandingan...\n');
+fprintf('STEP 5: Menghitung metrik perbandingan...\n');
 fprintf('============================================================\n\n');
 
 metrics_ccm = calc_metrics(SOC_true, SOC_ccm, time, 'CCM');
@@ -196,7 +247,7 @@ metrics_ocv = calc_metrics(SOC_true, SOC_ocv, time, 'OCV');
 metrics_ecc = calc_metrics(SOC_true, SOC_ecc, time, 'ECC');
 
 %% ==========================================================================
-%  STEP 7: Tampilkan Tabel Metrik di Command Window
+%  STEP 6: Tampilkan Tabel Metrik di Command Window
 %  ==========================================================================
 fprintf('============================================================\n');
 fprintf('  TABEL PERBANDINGAN METRIK ESTIMASI SOC\n');
@@ -219,7 +270,7 @@ fprintf('>> Metode terbaik berdasarkan RMSE: %s (%.4f%%)\n\n', ...
     method_names{best_idx}, min([metrics_ccm.RMSE, metrics_ocv.RMSE, metrics_ecc.RMSE]));
 
 %% ==========================================================================
-%  STEP 8: Tampilkan Parameter ECC yang Di-Update
+%  STEP 7: Tampilkan Parameter ECC yang Di-Update
 %  ==========================================================================
 if ~isempty(params_history)
     fprintf('============================================================\n');
@@ -240,9 +291,9 @@ if ~isempty(params_history)
 end
 
 %% ==========================================================================
-%  STEP 9: Generate Semua Plot
+%  STEP 8: Generate Semua Plot
 %  ==========================================================================
-fprintf('STEP 9: Membuat plot...\n');
+fprintf('STEP 8: Membuat plot...\n');
 fprintf('------------------------------------------------------------\n');
 
 plot_results(time, data, SOC_true, SOC_ccm, SOC_ocv, SOC_ecc, ...
@@ -251,9 +302,9 @@ plot_results(time, data, SOC_true, SOC_ccm, SOC_ocv, SOC_ecc, ...
 fprintf('  -> 4 figure berhasil dibuat\n\n');
 
 %% ==========================================================================
-%  STEP 10: Simpan Hasil
+%  STEP 9: Simpan Hasil
 %  ==========================================================================
-fprintf('STEP 10: Menyimpan hasil...\n');
+fprintf('STEP 9: Menyimpan hasil...\n');
 fprintf('------------------------------------------------------------\n');
 
 results.SOC_true = SOC_true;
@@ -273,6 +324,11 @@ results.config.Rb_init = Rb_init;
 results.config.eta_init = eta_init;
 results.config.ccm_initial_error = ccm_initial_error;
 results.config.ccm_current_bias = ccm_current_bias;
+results.config.use_synthetic_data = use_synthetic_data;
+
+if use_synthetic_data
+    results.ground_truth_params = ground_truth_synth;
+end
 
 save('soc_comparison_results.mat', 'results');
 fprintf('  -> Hasil disimpan ke: soc_comparison_results.mat\n');
@@ -283,16 +339,21 @@ fprintf('  -> Hasil disimpan ke: soc_comparison_results.mat\n');
 fprintf('\n============================================================\n');
 fprintf('  RINGKASAN SIMULASI\n');
 fprintf('============================================================\n');
-fprintf('Data: %d sampel, %.2f jam\n', N, (time(end)-time(1))/3600);
-fprintf('Baterai: C_nom=%.1f Ah, Rb=%.3f Ohm\n', C_nom, Rb_init);
+if use_synthetic_data
+    fprintf('Data: SINTETIK, %d sampel, %.2f jam\n', N, (time(end)-time(1))/3600);
+    fprintf('Baterai: C_nom=%.1f Ah (true=%.2f), Rb_init=%.3f (true=%.4f)\n', ...
+        C_nom, synth_params.C_true, Rb_init, synth_params.Rb_true);
+else
+    fprintf('Data: CSV EKSPERIMEN, %d sampel, %.2f jam\n', N, (time(end)-time(1))/3600);
+    fprintf('Baterai: C_nom=%.1f Ah, Rb=%.3f Ohm\n', C_nom, Rb_init);
+end
 fprintf('------------------------------------------------------------\n');
-fprintf('CCM:  RMSE=%.4f%%, Drift=%.4f%%/jam\n', metrics_ccm.RMSE, metrics_ccm.DriftRate);
+fprintf('CCM:  RMSE=%.4f%%, MAE=%.4f%%, Drift=%.4f%%/jam\n', metrics_ccm.RMSE, metrics_ccm.MAE, metrics_ccm.DriftRate);
 fprintf('      -> Kelemahan: initial error + bias = drift terakumulasi\n');
-fprintf('OCV:  RMSE=%.4f%%, Drift=%.4f%%/jam\n', metrics_ocv.RMSE, metrics_ocv.DriftRate);
+fprintf('OCV:  RMSE=%.4f%%, MAE=%.4f%%, Drift=%.4f%%/jam\n', metrics_ocv.RMSE, metrics_ocv.MAE, metrics_ocv.DriftRate);
 fprintf('      -> Kelemahan: inakurat saat arus tinggi (Vb != OCV)\n');
-fprintf('ECC:  RMSE=%.4f%%, Drift=%.4f%%/jam\n', metrics_ecc.RMSE, metrics_ecc.DriftRate);
+fprintf('ECC:  RMSE=%.4f%%, MAE=%.4f%%, Drift=%.4f%%/jam\n', metrics_ecc.RMSE, metrics_ecc.MAE, metrics_ecc.DriftRate);
 fprintf('      -> Kelebihan: koreksi OCV saat rest + update parameter per siklus\n');
-fprintf('      -> Perbaikan: Rb data-driven, rest-only correction, weighted blend\n');
 fprintf('------------------------------------------------------------\n');
 fprintf('>> Kesimpulan: %s memiliki akurasi terbaik (RMSE terendah)\n', method_names{best_idx});
 fprintf('============================================================\n');
