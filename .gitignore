@@ -1,0 +1,5 @@
+# Compiled test binaries
+tests/test_cc
+tests/test_battery_params
+tests/test_aukf
+tests/test_soc_estimator
