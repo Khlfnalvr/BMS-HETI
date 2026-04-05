@@ -1,203 +1,191 @@
 /**
- * test_cc.c - Unit tests for CoulombCounter (CC.c / CC.h)
- *
- * Formula under test:
- *   SoC_new = SoC_old - (100 * eta * I * dt) / (3600 * Q)
- *
- * Positive current  = discharge  → SoC decreases
- * Negative current  = charge     → SoC increases
+ * Unit tests for Coulomb Counting (CC) module
  */
 
 #include "unity.h"
-#include "../CC.h"
+#include "../cc.h"
 
-/* ── helpers ─────────────────────────────────────────────────────────── */
+/* ============================================================
+ * Helpers
+ * ============================================================ */
 
-/* Capacity 2.6 Ah, efficiency 1.0 */
-static CoulombCounter_t make_cc(float initial_soc) {
-    CoulombCounter_t cc;
-    CoulombCounter_Init(&cc, initial_soc, 2.6f, 1.0f);
-    return cc;
+static CoulombCounter_t cc;
+
+/* ============================================================
+ * Init tests
+ * ============================================================ */
+
+static void test_init_sets_soc(void) {
+    CoulombCounter_Init(&cc, 80.0f, 2.6f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(80.0f, CoulombCounter_GetSoC(&cc), 1e-4f);
 }
 
-/* ── init tests ──────────────────────────────────────────────────────── */
-
-TEST(init_stores_soc) {
-    CoulombCounter_t cc = make_cc(80.0f);
-    ASSERT_FLOAT_EQ(cc.SoC, 80.0f, 1e-5f);
+static void test_init_clamps_soc_above_100(void) {
+    CoulombCounter_Init(&cc, 120.0f, 2.6f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(100.0f, CoulombCounter_GetSoC(&cc), 1e-4f);
 }
 
-TEST(init_stores_capacity) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    ASSERT_FLOAT_EQ(cc.capacity, 2.6f, 1e-5f);
+static void test_init_clamps_soc_below_0(void) {
+    CoulombCounter_Init(&cc, -10.0f, 2.6f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, CoulombCounter_GetSoC(&cc), 1e-4f);
 }
 
-TEST(init_stores_eta) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    ASSERT_FLOAT_EQ(cc.eta, 1.0f, 1e-5f);
+static void test_init_sets_capacity(void) {
+    CoulombCounter_Init(&cc, 50.0f, 3.0f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(3.0f, cc.capacity, 1e-5f);
 }
 
-TEST(init_zeroes_statistics) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    ASSERT_INT_EQ(cc.update_count, 0);
-    ASSERT_FLOAT_EQ(cc.total_Ah, 0.0f, 1e-5f);
+static void test_init_sets_eta(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 0.98f);
+    TEST_ASSERT_EQUAL_FLOAT(0.98f, cc.eta, 1e-5f);
 }
 
-TEST(init_clamps_soc_above_100) {
-    CoulombCounter_t cc = make_cc(120.0f);
-    ASSERT_FLOAT_EQ(cc.SoC, 100.0f, 1e-5f);
+static void test_init_resets_update_count(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    TEST_ASSERT_EQUAL_INT(0, (int)cc.update_count);
 }
 
-TEST(init_clamps_soc_below_0) {
-    CoulombCounter_t cc = make_cc(-10.0f);
-    ASSERT_FLOAT_EQ(cc.SoC, 0.0f, 1e-5f);
+static void test_init_resets_total_ah(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, cc.total_Ah, 1e-6f);
 }
 
-/* ── update: basic formula ───────────────────────────────────────────── */
+/* ============================================================
+ * Update tests
+ * ============================================================ */
 
-TEST(update_discharge_decreases_soc) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    /* 1 A for 1 s → delta = (100 * 1 * 1 * 1) / (3600 * 2.6) ≈ 0.01068 % */
-    float soc = CoulombCounter_Update(&cc, 1.0f, 1.0f);
-    ASSERT_TRUE(soc < 50.0f);
-}
-
-TEST(update_charge_increases_soc) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    /* negative current = charge */
-    float soc = CoulombCounter_Update(&cc, -1.0f, 1.0f);
-    ASSERT_TRUE(soc > 50.0f);
-}
-
-TEST(update_formula_exact) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    /* delta = (100 * 1.0 * 2.0 * 10.0) / (3600 * 2.6) = 2000/9360 ≈ 0.21368 % */
-    float expected_delta = (100.0f * 1.0f * 2.0f * 10.0f) / (3600.0f * 2.6f);
-    float soc = CoulombCounter_Update(&cc, 2.0f, 10.0f);
-    ASSERT_FLOAT_EQ(soc, 50.0f - expected_delta, 1e-4f);
-}
-
-TEST(update_zero_current_no_change) {
-    CoulombCounter_t cc = make_cc(75.0f);
+static void test_update_zero_current_no_change(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
     float soc = CoulombCounter_Update(&cc, 0.0f, 1.0f);
-    ASSERT_FLOAT_EQ(soc, 75.0f, 1e-5f);
+    TEST_ASSERT_EQUAL_FLOAT(50.0f, soc, 1e-4f);
 }
 
-TEST(update_zero_dt_no_change) {
-    CoulombCounter_t cc = make_cc(75.0f);
-    float soc = CoulombCounter_Update(&cc, 5.0f, 0.0f);
-    ASSERT_FLOAT_EQ(soc, 75.0f, 1e-5f);
+static void test_update_positive_current_decreases_soc(void) {
+    /* Discharge: positive current should lower SoC */
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    float soc = CoulombCounter_Update(&cc, 1.0f, 1.0f);
+    TEST_ASSERT(soc < 50.0f);
 }
 
-/* ── update: clamping ────────────────────────────────────────────────── */
+static void test_update_negative_current_increases_soc(void) {
+    /* Charge: negative current should raise SoC */
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    float soc = CoulombCounter_Update(&cc, -1.0f, 1.0f);
+    TEST_ASSERT(soc > 50.0f);
+}
 
-TEST(update_clamps_at_zero_on_overdischarge) {
-    CoulombCounter_t cc = make_cc(0.5f);
-    /* huge current for long time → would go very negative */
+static void test_update_formula_correctness(void) {
+    /*
+     * delta_SoC = (100 * eta * I * dt) / (3600 * Q)
+     *           = (100 * 1.0 * 1.0 * 3600) / (3600 * 2.6)
+     *           = 100 / 2.6 ≈ 38.4615 %
+     * New SoC   = 50 - 38.4615 ≈ 11.5385 %
+     */
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    float soc = CoulombCounter_Update(&cc, 1.0f, 3600.0f);
+    float expected = 50.0f - (100.0f * 1.0f * 1.0f * 3600.0f) / (3600.0f * 2.6f);
+    TEST_ASSERT_EQUAL_FLOAT(expected, soc, 1e-3f);
+}
+
+static void test_update_eta_scales_delta(void) {
+    /* eta=0.5 halves the capacity loss */
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 0.5f);
+    float soc_half = CoulombCounter_Update(&cc, 1.0f, 3600.0f);
+
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    float soc_full = CoulombCounter_Update(&cc, 1.0f, 3600.0f);
+
+    /* delta at eta=0.5 should be half that at eta=1.0 */
+    float delta_half = 50.0f - soc_half;
+    float delta_full = 50.0f - soc_full;
+    TEST_ASSERT_EQUAL_FLOAT(delta_full / 2.0f, delta_half, 1e-3f);
+}
+
+static void test_update_clamps_soc_at_zero(void) {
+    CoulombCounter_Init(&cc, 1.0f, 2.6f, 1.0f);
+    /* Large discharge */
     float soc = CoulombCounter_Update(&cc, 100.0f, 3600.0f);
-    ASSERT_FLOAT_EQ(soc, 0.0f, 1e-5f);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, soc, 1e-4f);
 }
 
-TEST(update_clamps_at_100_on_overcharge) {
-    CoulombCounter_t cc = make_cc(99.5f);
+static void test_update_clamps_soc_at_100(void) {
+    CoulombCounter_Init(&cc, 99.0f, 2.6f, 1.0f);
+    /* Large charge (negative current) */
     float soc = CoulombCounter_Update(&cc, -100.0f, 3600.0f);
-    ASSERT_FLOAT_EQ(soc, 100.0f, 1e-5f);
+    TEST_ASSERT_EQUAL_FLOAT(100.0f, soc, 1e-4f);
 }
 
-/* ── update: statistics ──────────────────────────────────────────────── */
+static void test_update_increments_update_count(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    CoulombCounter_Update(&cc, 0.0f, 1.0f);
+    CoulombCounter_Update(&cc, 0.0f, 1.0f);
+    TEST_ASSERT_EQUAL_INT(2, (int)cc.update_count);
+}
 
-TEST(update_increments_update_count) {
-    CoulombCounter_t cc = make_cc(50.0f);
+static void test_update_accumulates_total_ah(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    CoulombCounter_Update(&cc, 2.0f, 3600.0f);  /* 2 A * 1 h = 2 Ah */
+    TEST_ASSERT_EQUAL_FLOAT(2.0f, cc.total_Ah, 1e-3f);
+}
+
+/* ============================================================
+ * Reset tests
+ * ============================================================ */
+
+static void test_reset_sets_new_soc(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
     CoulombCounter_Update(&cc, 1.0f, 1.0f);
-    CoulombCounter_Update(&cc, 1.0f, 1.0f);
-    ASSERT_INT_EQ(cc.update_count, 2);
+    CoulombCounter_Reset(&cc, 75.0f);
+    TEST_ASSERT_EQUAL_FLOAT(75.0f, CoulombCounter_GetSoC(&cc), 1e-4f);
 }
 
-TEST(update_accumulates_total_ah) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    /* 2 A for 1800 s = 2 * 1800 / 3600 = 1.0 Ah */
-    CoulombCounter_Update(&cc, 2.0f, 1800.0f);
-    ASSERT_FLOAT_EQ(cc.total_Ah, 1.0f, 1e-4f);
-}
-
-TEST(update_accumulates_total_ah_multiple_steps) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    CoulombCounter_Update(&cc, 1.0f, 3600.0f);   /* 1 Ah */
-    CoulombCounter_Update(&cc, 2.0f, 1800.0f);   /* 1 Ah */
-    ASSERT_FLOAT_EQ(cc.total_Ah, 2.0f, 1e-4f);
-}
-
-/* ── reset ───────────────────────────────────────────────────────────── */
-
-TEST(reset_sets_new_soc) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    CoulombCounter_Update(&cc, 1.0f, 100.0f);
-    CoulombCounter_Reset(&cc, 90.0f);
-    ASSERT_FLOAT_EQ(cc.SoC, 90.0f, 1e-5f);
-}
-
-TEST(reset_clamps_soc) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    CoulombCounter_Reset(&cc, 110.0f);
-    ASSERT_FLOAT_EQ(cc.SoC, 100.0f, 1e-5f);
-}
-
-TEST(reset_zeroes_statistics) {
-    CoulombCounter_t cc = make_cc(50.0f);
-    CoulombCounter_Update(&cc, 1.0f, 100.0f);
+static void test_reset_clears_total_ah(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    CoulombCounter_Update(&cc, 1.0f, 3600.0f);
     CoulombCounter_Reset(&cc, 50.0f);
-    ASSERT_INT_EQ(cc.update_count, 0);
-    ASSERT_FLOAT_EQ(cc.total_Ah, 0.0f, 1e-5f);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, cc.total_Ah, 1e-6f);
 }
 
-/* ── getter ──────────────────────────────────────────────────────────── */
-
-TEST(get_soc_returns_current_soc) {
-    CoulombCounter_t cc = make_cc(60.0f);
-    ASSERT_FLOAT_EQ(CoulombCounter_GetSoC(&cc), 60.0f, 1e-5f);
+static void test_reset_clears_update_count(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
     CoulombCounter_Update(&cc, 1.0f, 1.0f);
-    ASSERT_FLOAT_EQ(CoulombCounter_GetSoC(&cc), cc.SoC, 1e-5f);
+    CoulombCounter_Reset(&cc, 50.0f);
+    TEST_ASSERT_EQUAL_INT(0, (int)cc.update_count);
 }
 
-/* ── cumulative discharge test ───────────────────────────────────────── */
-
-TEST(full_discharge_from_100_reaches_0) {
-    CoulombCounter_t cc = make_cc(100.0f);
-    /* Discharge at 2.6 A for 3600 s = exactly 2.6 Ah = 100 % */
-    CoulombCounter_Update(&cc, 2.6f, 3600.0f);
-    ASSERT_FLOAT_EQ(CoulombCounter_GetSoC(&cc), 0.0f, 1e-3f);
+static void test_reset_clamps_above_100(void) {
+    CoulombCounter_Init(&cc, 50.0f, 2.6f, 1.0f);
+    CoulombCounter_Reset(&cc, 150.0f);
+    TEST_ASSERT_EQUAL_FLOAT(100.0f, CoulombCounter_GetSoC(&cc), 1e-4f);
 }
 
-/* ── entry point ─────────────────────────────────────────────────────── */
+/* ============================================================
+ * Test suite entry point
+ * ============================================================ */
 
-int main(void) {
-    printf("=== CoulombCounter Tests ===\n");
+void test_cc_run(void) {
+    UNITY_BEGIN("Coulomb Counting (CC)");
 
-    RUN_TEST(init_stores_soc);
-    RUN_TEST(init_stores_capacity);
-    RUN_TEST(init_stores_eta);
-    RUN_TEST(init_zeroes_statistics);
-    RUN_TEST(init_clamps_soc_above_100);
-    RUN_TEST(init_clamps_soc_below_0);
+    RUN_TEST(test_init_sets_soc);
+    RUN_TEST(test_init_clamps_soc_above_100);
+    RUN_TEST(test_init_clamps_soc_below_0);
+    RUN_TEST(test_init_sets_capacity);
+    RUN_TEST(test_init_sets_eta);
+    RUN_TEST(test_init_resets_update_count);
+    RUN_TEST(test_init_resets_total_ah);
 
-    RUN_TEST(update_discharge_decreases_soc);
-    RUN_TEST(update_charge_increases_soc);
-    RUN_TEST(update_formula_exact);
-    RUN_TEST(update_zero_current_no_change);
-    RUN_TEST(update_zero_dt_no_change);
-    RUN_TEST(update_clamps_at_zero_on_overdischarge);
-    RUN_TEST(update_clamps_at_100_on_overcharge);
-    RUN_TEST(update_increments_update_count);
-    RUN_TEST(update_accumulates_total_ah);
-    RUN_TEST(update_accumulates_total_ah_multiple_steps);
+    RUN_TEST(test_update_zero_current_no_change);
+    RUN_TEST(test_update_positive_current_decreases_soc);
+    RUN_TEST(test_update_negative_current_increases_soc);
+    RUN_TEST(test_update_formula_correctness);
+    RUN_TEST(test_update_eta_scales_delta);
+    RUN_TEST(test_update_clamps_soc_at_zero);
+    RUN_TEST(test_update_clamps_soc_at_100);
+    RUN_TEST(test_update_increments_update_count);
+    RUN_TEST(test_update_accumulates_total_ah);
 
-    RUN_TEST(reset_sets_new_soc);
-    RUN_TEST(reset_clamps_soc);
-    RUN_TEST(reset_zeroes_statistics);
-
-    RUN_TEST(get_soc_returns_current_soc);
-    RUN_TEST(full_discharge_from_100_reaches_0);
-
-    PRINT_RESULTS();
-    return RESULTS_OK() ? 0 : 1;
+    RUN_TEST(test_reset_sets_new_soc);
+    RUN_TEST(test_reset_clears_total_ah);
+    RUN_TEST(test_reset_clears_update_count);
+    RUN_TEST(test_reset_clamps_above_100);
 }

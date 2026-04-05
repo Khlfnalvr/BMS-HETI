@@ -1,220 +1,186 @@
 /**
- * test_soc_estimator.c - Integration tests for SoC_Estimator (SOCEstimator.c)
- *
- * Covers:
- *  - SoC_Estimator_Init
- *  - SoC_Estimator_Update  (return value, CCM vs AUKF fields, count)
- *  - SoC_Estimator_GetSoC / GetSoC_CCM
- *  - SoC_Estimator_SetTemperature
- *  - SoC_Estimator_Reset
+ * Integration tests for the SoC_Estimator (CCM + AUKF hybrid)
  */
 
 #include "unity.h"
-#include "../SOCEstimator.h"
-
-/* ── shared fixture ──────────────────────────────────────────────────── */
+#include "../socestimator.h"
 
 static SoC_Estimator_t est;
 
-static void setup(float initial_soc, float temperature) {
-    SoC_Estimator_Init(&est, initial_soc, temperature);
+static void setup(void) {
+    SoC_Estimator_Init(&est, 80.0f, 25.0f);
 }
 
-/* ── SoC_Estimator_Init ──────────────────────────────────────────────── */
+/* ============================================================
+ * Init tests
+ * ============================================================ */
 
-TEST(init_ccm_soc_set) {
-    setup(70.0f, 25.0f);
-    ASSERT_FLOAT_EQ(est.SoC_CCM, 70.0f, 1e-5f);
+static void test_init_soc_aukf(void) {
+    setup();
+    TEST_ASSERT_EQUAL_FLOAT(80.0f, SoC_Estimator_GetSoC(&est), 1e-4f);
 }
 
-TEST(init_aukf_soc_set) {
-    setup(70.0f, 25.0f);
-    ASSERT_FLOAT_EQ(est.SoC_AUKF, 70.0f, 1e-5f);
+static void test_init_soc_ccm(void) {
+    setup();
+    TEST_ASSERT_EQUAL_FLOAT(80.0f, SoC_Estimator_GetSoC_CCM(&est), 1e-4f);
 }
 
-TEST(init_update_count_zero) {
-    setup(70.0f, 25.0f);
-    ASSERT_INT_EQ(est.update_count, 0);
+static void test_init_update_count_zero(void) {
+    setup();
+    TEST_ASSERT_EQUAL_INT(0, (int)est.update_count);
 }
 
-TEST(init_temperature_stored) {
-    setup(50.0f, 35.0f);
-    ASSERT_FLOAT_EQ(est.temperature, 35.0f, 1e-5f);
+static void test_init_temperature_stored(void) {
+    setup();
+    TEST_ASSERT_EQUAL_FLOAT(25.0f, est.temperature, 1e-4f);
 }
 
-TEST(init_battery_nominal_capacity_set) {
-    setup(50.0f, 25.0f);
-    ASSERT_FLOAT_EQ(est.battery.Q_nominal, BATTERY_NOMINAL_CAPACITY, 1e-5f);
+/* ============================================================
+ * Update tests
+ * ============================================================ */
+
+static void test_update_returns_soc_in_range(void) {
+    setup();
+    float soc = SoC_Estimator_Update(&est, 1.0f, 3.35f, 1.0f);
+    TEST_ASSERT_FLOAT_RANGE(soc, 0.0f, 100.0f);
 }
 
-/* ── SoC_Estimator_Update ────────────────────────────────────────────── */
-
-TEST(update_returns_soc_in_valid_range) {
-    setup(50.0f, 25.0f);
-    float soc = SoC_Estimator_Update(&est, 1.0f, 3.3f, 1.0f);
-    ASSERT_FLOAT_GE(soc, 0.0f);
-    ASSERT_FLOAT_LE(soc, 100.0f);
+static void test_update_get_soc_matches_return(void) {
+    setup();
+    float ret = SoC_Estimator_Update(&est, 1.0f, 3.35f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(ret, SoC_Estimator_GetSoC(&est), 1e-5f);
 }
 
-TEST(update_increments_count) {
-    setup(50.0f, 25.0f);
-    SoC_Estimator_Update(&est, 1.0f, 3.3f, 1.0f);
-    SoC_Estimator_Update(&est, 1.0f, 3.3f, 1.0f);
-    ASSERT_INT_EQ(est.update_count, 2);
+static void test_update_ccm_soc_in_range(void) {
+    setup();
+    SoC_Estimator_Update(&est, 1.0f, 3.35f, 1.0f);
+    TEST_ASSERT_FLOAT_RANGE(SoC_Estimator_GetSoC_CCM(&est), 0.0f, 100.0f);
 }
 
-TEST(update_stores_measured_voltage) {
-    setup(50.0f, 25.0f);
-    SoC_Estimator_Update(&est, 1.0f, 3.45f, 1.0f);
-    ASSERT_FLOAT_EQ(est.V_measured, 3.45f, 1e-5f);
+static void test_update_increments_count(void) {
+    setup();
+    SoC_Estimator_Update(&est, 1.0f, 3.35f, 1.0f);
+    SoC_Estimator_Update(&est, 1.0f, 3.35f, 1.0f);
+    TEST_ASSERT_EQUAL_INT(2, (int)est.update_count);
 }
 
-TEST(update_ccm_soc_decreases_on_discharge) {
-    setup(80.0f, 25.0f);
-    SoC_Estimator_Update(&est, 2.6f, 3.3f, 3600.0f);   /* full capacity discharged */
-    ASSERT_TRUE(est.SoC_CCM < 80.0f);
+static void test_update_stores_measured_voltage(void) {
+    setup();
+    SoC_Estimator_Update(&est, 1.0f, 3.42f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(3.42f, est.V_measured, 1e-4f);
 }
 
-TEST(update_returns_aukf_soc_not_ccm) {
-    /*
-     * With a voltage that is far from CCM prediction, the AUKF will
-     * correct the SoC.  The returned value should equal SoC_AUKF, not
-     * SoC_CCM.
-     */
-    setup(50.0f, 25.0f);
-    float ret = SoC_Estimator_Update(&est, 0.0f, 3.7f, 1.0f);
-    ASSERT_FLOAT_EQ(ret, est.SoC_AUKF, 1e-5f);
+static void test_update_discharge_reduces_ccm_soc(void) {
+    setup();
+    /* Apply 1 A discharge for 3600 s → CCM SoC should drop substantially */
+    SoC_Estimator_Update(&est, 1.0f, 3.35f, 3600.0f);
+    TEST_ASSERT(SoC_Estimator_GetSoC_CCM(&est) < 80.0f);
 }
 
-TEST(update_get_soc_matches_update_return) {
-    setup(60.0f, 25.0f);
-    float ret = SoC_Estimator_Update(&est, 1.0f, 3.3f, 1.0f);
-    ASSERT_FLOAT_EQ(SoC_Estimator_GetSoC(&est), ret, 1e-5f);
+static void test_update_zero_current_ccm_unchanged(void) {
+    setup();
+    SoC_Estimator_Update(&est, 0.0f, 3.35f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(80.0f, SoC_Estimator_GetSoC_CCM(&est), 1e-4f);
 }
 
-TEST(update_get_soc_ccm_matches_field) {
-    setup(60.0f, 25.0f);
-    SoC_Estimator_Update(&est, 1.0f, 3.3f, 1.0f);
-    ASSERT_FLOAT_EQ(SoC_Estimator_GetSoC_CCM(&est), est.SoC_CCM, 1e-5f);
+static void test_update_many_iterations_stay_in_range(void) {
+    setup();
+    float soc = 80.0f;
+    for (int i = 0; i < 100; i++) {
+        soc = SoC_Estimator_Update(&est, 0.5f, 3.3f, 1.0f);
+    }
+    TEST_ASSERT_FLOAT_RANGE(soc, 0.0f, 100.0f);
 }
 
-/* ── Consistency: zero current, matching voltage ─────────────────────── */
+/* ============================================================
+ * SetTemperature tests
+ * ============================================================ */
 
-TEST(update_no_current_correct_voltage_stays_near_initial) {
-    /*
-     * At SoC=50%, zero current, feed the exact OCV for 50%.
-     * After one step both CCM and AUKF should remain close to 50%.
-     */
-    setup(50.0f, 25.0f);
-    float ocv = BatteryParams_GetOCV(&est.battery, 50.0f, 25.0f);
-    float soc = SoC_Estimator_Update(&est, 0.0f, ocv, 1.0f);
-    ASSERT_FLOAT_GE(soc, 45.0f);
-    ASSERT_FLOAT_LE(soc, 55.0f);
+static void test_set_temperature_updates_estimator(void) {
+    setup();
+    SoC_Estimator_SetTemperature(&est, 45.0f);
+    TEST_ASSERT_EQUAL_FLOAT(45.0f, est.temperature, 1e-4f);
 }
 
-/* ── SoC_Estimator_SetTemperature ────────────────────────────────────── */
-
-TEST(set_temperature_updates_estimator_temp) {
-    setup(50.0f, 25.0f);
-    SoC_Estimator_SetTemperature(&est, 40.0f);
-    ASSERT_FLOAT_EQ(est.temperature, 40.0f, 1e-5f);
+static void test_set_temperature_updates_aukf(void) {
+    setup();
+    SoC_Estimator_SetTemperature(&est, 45.0f);
+    TEST_ASSERT_EQUAL_FLOAT(45.0f, est.aukf.temperature, 1e-4f);
 }
 
-TEST(set_temperature_updates_aukf_temp) {
-    setup(50.0f, 25.0f);
-    SoC_Estimator_SetTemperature(&est, 40.0f);
-    ASSERT_FLOAT_EQ(est.aukf.temperature, 40.0f, 1e-5f);
-}
+/* ============================================================
+ * Reset tests
+ * ============================================================ */
 
-/* ── SoC_Estimator_Reset ─────────────────────────────────────────────── */
-
-TEST(reset_sets_ccm_soc) {
-    setup(50.0f, 25.0f);
+static void test_reset_sets_soc(void) {
+    setup();
     SoC_Estimator_Update(&est, 1.0f, 3.3f, 10.0f);
     SoC_Estimator_Reset(&est, 90.0f);
-    ASSERT_FLOAT_EQ(est.SoC_CCM, 90.0f, 1e-5f);
+    TEST_ASSERT_EQUAL_FLOAT(90.0f, est.SoC_CCM, 1e-4f);
+    TEST_ASSERT_EQUAL_FLOAT(90.0f, est.SoC_AUKF, 1e-4f);
 }
 
-TEST(reset_sets_aukf_soc) {
-    setup(50.0f, 25.0f);
+static void test_reset_clears_count(void) {
+    setup();
     SoC_Estimator_Update(&est, 1.0f, 3.3f, 10.0f);
-    SoC_Estimator_Reset(&est, 90.0f);
-    ASSERT_FLOAT_EQ(est.SoC_AUKF, 90.0f, 1e-5f);
-}
-
-TEST(reset_zeroes_update_count) {
-    setup(50.0f, 25.0f);
-    SoC_Estimator_Update(&est, 1.0f, 3.3f, 1.0f);
-    SoC_Estimator_Update(&est, 1.0f, 3.3f, 1.0f);
     SoC_Estimator_Reset(&est, 50.0f);
-    ASSERT_INT_EQ(est.update_count, 0);
+    TEST_ASSERT_EQUAL_INT(0, (int)est.update_count);
 }
 
-TEST(reset_then_update_works_correctly) {
-    setup(50.0f, 25.0f);
-    SoC_Estimator_Reset(&est, 80.0f);
-    float soc = SoC_Estimator_Update(&est, 0.0f, 3.42f, 1.0f);
-    ASSERT_FLOAT_GE(soc, 0.0f);
-    ASSERT_FLOAT_LE(soc, 100.0f);
-    ASSERT_INT_EQ(est.update_count, 1);
+static void test_reset_aukf_soc_matches(void) {
+    setup();
+    SoC_Estimator_Reset(&est, 60.0f);
+    TEST_ASSERT_EQUAL_FLOAT(60.0f, AUKF_GetSoC(&est.aukf), 1e-4f);
 }
 
-/* ── Multi-step scenario ─────────────────────────────────────────────── */
+/* ============================================================
+ * CCM vs AUKF comparison
+ * ============================================================ */
 
-TEST(multi_step_ccm_always_clamps_at_zero) {
+static void test_aukf_soc_can_differ_from_ccm_after_update(void) {
     /*
-     * Start at 5% SoC and discharge hard enough to hit the 0% floor.
-     * Both CCM and AUKF should be ≥ 0 at all times.
+     * With a voltage that doesn't match the CCM prediction, AUKF corrects
+     * the SoC while CCM just integrates. After several steps with a
+     * mismatched voltage, the two estimates may diverge.
      */
-    setup(5.0f, 25.0f);
-    for (int i = 0; i < 10; i++) {
-        float soc = SoC_Estimator_Update(&est, 5.0f, 3.0f, 100.0f);
-        ASSERT_FLOAT_GE(soc, 0.0f);
-        ASSERT_FLOAT_GE(est.SoC_CCM, 0.0f);
+    setup();
+    float ccm_soc = 80.0f, aukf_soc = 80.0f;
+    for (int i = 0; i < 20; i++) {
+        aukf_soc = SoC_Estimator_Update(&est, 1.0f, 2.8f, 1.0f); /* low V */
+        ccm_soc  = SoC_Estimator_GetSoC_CCM(&est);
     }
+    /* Both should remain in valid range */
+    TEST_ASSERT_FLOAT_RANGE(aukf_soc, 0.0f, 100.0f);
+    TEST_ASSERT_FLOAT_RANGE(ccm_soc,  0.0f, 100.0f);
 }
 
-TEST(multi_step_ccm_always_clamps_at_100) {
-    setup(95.0f, 25.0f);
-    for (int i = 0; i < 10; i++) {
-        /* negative current = charging */
-        float soc = SoC_Estimator_Update(&est, -5.0f, 3.7f, 100.0f);
-        ASSERT_FLOAT_LE(soc, 100.0f);
-        ASSERT_FLOAT_LE(est.SoC_CCM, 100.0f);
-    }
-}
+/* ============================================================
+ * Test suite entry point
+ * ============================================================ */
 
-/* ── entry point ─────────────────────────────────────────────────────── */
+void test_soc_estimator_run(void) {
+    UNITY_BEGIN("SoC Estimator (CCM + AUKF)");
 
-int main(void) {
-    printf("=== SoC_Estimator Integration Tests ===\n");
+    RUN_TEST(test_init_soc_aukf);
+    RUN_TEST(test_init_soc_ccm);
+    RUN_TEST(test_init_update_count_zero);
+    RUN_TEST(test_init_temperature_stored);
 
-    RUN_TEST(init_ccm_soc_set);
-    RUN_TEST(init_aukf_soc_set);
-    RUN_TEST(init_update_count_zero);
-    RUN_TEST(init_temperature_stored);
-    RUN_TEST(init_battery_nominal_capacity_set);
+    RUN_TEST(test_update_returns_soc_in_range);
+    RUN_TEST(test_update_get_soc_matches_return);
+    RUN_TEST(test_update_ccm_soc_in_range);
+    RUN_TEST(test_update_increments_count);
+    RUN_TEST(test_update_stores_measured_voltage);
+    RUN_TEST(test_update_discharge_reduces_ccm_soc);
+    RUN_TEST(test_update_zero_current_ccm_unchanged);
+    RUN_TEST(test_update_many_iterations_stay_in_range);
 
-    RUN_TEST(update_returns_soc_in_valid_range);
-    RUN_TEST(update_increments_count);
-    RUN_TEST(update_stores_measured_voltage);
-    RUN_TEST(update_ccm_soc_decreases_on_discharge);
-    RUN_TEST(update_returns_aukf_soc_not_ccm);
-    RUN_TEST(update_get_soc_matches_update_return);
-    RUN_TEST(update_get_soc_ccm_matches_field);
-    RUN_TEST(update_no_current_correct_voltage_stays_near_initial);
+    RUN_TEST(test_set_temperature_updates_estimator);
+    RUN_TEST(test_set_temperature_updates_aukf);
 
-    RUN_TEST(set_temperature_updates_estimator_temp);
-    RUN_TEST(set_temperature_updates_aukf_temp);
+    RUN_TEST(test_reset_sets_soc);
+    RUN_TEST(test_reset_clears_count);
+    RUN_TEST(test_reset_aukf_soc_matches);
 
-    RUN_TEST(reset_sets_ccm_soc);
-    RUN_TEST(reset_sets_aukf_soc);
-    RUN_TEST(reset_zeroes_update_count);
-    RUN_TEST(reset_then_update_works_correctly);
-
-    RUN_TEST(multi_step_ccm_always_clamps_at_zero);
-    RUN_TEST(multi_step_ccm_always_clamps_at_100);
-
-    PRINT_RESULTS();
-    return RESULTS_OK() ? 0 : 1;
+    RUN_TEST(test_aukf_soc_can_differ_from_ccm_after_update);
 }

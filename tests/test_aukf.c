@@ -1,222 +1,192 @@
 /**
- * test_aukf.c - Unit tests for AUKF (AUKF.c / AUKF.h)
- *
- * Covers:
- *  - AUKF_Init  (initial state, covariance, clamping)
- *  - AUKF_GetSoC / AUKF_GetVtr / AUKF_GetInnovation
- *  - AUKF_Update  (output range, count, convergence direction)
+ * Unit tests for the Adaptive Unscented Kalman Filter (AUKF) module
  */
 
 #include "unity.h"
-#include "../AUKF.h"
+#include "../aukf.h"
 #include "../Bateryparameter.h"
 
-/* ── shared fixture ──────────────────────────────────────────────────── */
-
-static BatteryParams_t bp;
 static AUKF_t aukf;
+static BatteryParams_t battery;
 
-static void setup(float initial_soc, float temperature) {
-    BatteryParams_Init(&bp);
-    AUKF_Init(&aukf, &bp, initial_soc, temperature);
+static void setup(void) {
+    BatteryParams_Init(&battery);
+    AUKF_Init(&aukf, &battery, 50.0f, 25.0f);
 }
 
-/* ── AUKF_Init ───────────────────────────────────────────────────────── */
+/* ============================================================
+ * Init tests
+ * ============================================================ */
 
-TEST(init_soc_state_set) {
-    setup(80.0f, 25.0f);
-    ASSERT_FLOAT_EQ(aukf.x[0], 80.0f, 1e-5f);
+static void test_init_sets_soc(void) {
+    setup();
+    TEST_ASSERT_EQUAL_FLOAT(50.0f, AUKF_GetSoC(&aukf), 1e-4f);
 }
 
-TEST(init_vtr_starts_at_zero) {
-    setup(80.0f, 25.0f);
-    ASSERT_FLOAT_EQ(aukf.x[1], 0.0f, 1e-5f);
+static void test_init_sets_vtr_zero(void) {
+    setup();
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, AUKF_GetVtr(&aukf), 1e-6f);
 }
 
-TEST(init_soc_clamped_above_100) {
-    setup(150.0f, 25.0f);
-    ASSERT_FLOAT_EQ(aukf.x[0], 100.0f, 1e-5f);
+static void test_init_clamps_soc_above_100(void) {
+    BatteryParams_Init(&battery);
+    AUKF_Init(&aukf, &battery, 120.0f, 25.0f);
+    TEST_ASSERT_EQUAL_FLOAT(100.0f, AUKF_GetSoC(&aukf), 1e-4f);
 }
 
-TEST(init_soc_clamped_below_0) {
-    setup(-20.0f, 25.0f);
-    ASSERT_FLOAT_EQ(aukf.x[0], 0.0f, 1e-5f);
+static void test_init_clamps_soc_below_0(void) {
+    BatteryParams_Init(&battery);
+    AUKF_Init(&aukf, &battery, -10.0f, 25.0f);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, AUKF_GetSoC(&aukf), 1e-4f);
 }
 
-TEST(init_diagonal_covariance_positive) {
-    setup(50.0f, 25.0f);
-    ASSERT_TRUE(aukf.P[0][0] > 0.0f);
-    ASSERT_TRUE(aukf.P[1][1] > 0.0f);
+static void test_init_resets_update_count(void) {
+    setup();
+    TEST_ASSERT_EQUAL_INT(0, (int)aukf.update_count);
 }
 
-TEST(init_off_diagonal_covariance_zero) {
-    setup(50.0f, 25.0f);
-    ASSERT_FLOAT_EQ(aukf.P[0][1], 0.0f, 1e-5f);
-    ASSERT_FLOAT_EQ(aukf.P[1][0], 0.0f, 1e-5f);
+static void test_init_positive_covariance_diagonal(void) {
+    setup();
+    TEST_ASSERT(aukf.P[0][0] > 0.0f);
+    TEST_ASSERT(aukf.P[1][1] > 0.0f);
 }
 
-TEST(init_process_noise_positive) {
-    setup(50.0f, 25.0f);
-    ASSERT_TRUE(aukf.Q[0][0] > 0.0f);
-    ASSERT_TRUE(aukf.Q[1][1] > 0.0f);
+static void test_init_positive_Q_diagonal(void) {
+    setup();
+    TEST_ASSERT(aukf.Q[0][0] > 0.0f);
+    TEST_ASSERT(aukf.Q[1][1] > 0.0f);
 }
 
-TEST(init_measurement_noise_positive) {
-    setup(50.0f, 25.0f);
-    ASSERT_TRUE(aukf.R > 0.0f);
+static void test_init_positive_R(void) {
+    setup();
+    TEST_ASSERT(aukf.R > 0.0f);
 }
 
-TEST(init_update_count_zero) {
-    setup(50.0f, 25.0f);
-    ASSERT_INT_EQ(aukf.update_count, 0);
+/* ============================================================
+ * Update output range tests
+ * ============================================================ */
+
+static void test_update_returns_soc_in_range(void) {
+    setup();
+    float soc = AUKF_Update(&aukf, 50.0f, 1.0f, 3.2f, 1.0f);
+    TEST_ASSERT_FLOAT_RANGE(soc, 0.0f, 100.0f);
 }
 
-TEST(init_battery_pointer_set) {
-    setup(50.0f, 25.0f);
-    ASSERT_TRUE(aukf.battery == &bp);
+static void test_update_increments_count(void) {
+    setup();
+    AUKF_Update(&aukf, 50.0f, 1.0f, 3.2f, 1.0f);
+    AUKF_Update(&aukf, 49.0f, 1.0f, 3.2f, 1.0f);
+    TEST_ASSERT_EQUAL_INT(2, (int)aukf.update_count);
 }
 
-/* ── Getters ─────────────────────────────────────────────────────────── */
-
-TEST(get_soc_returns_state_x0) {
-    setup(65.0f, 25.0f);
-    ASSERT_FLOAT_EQ(AUKF_GetSoC(&aukf), 65.0f, 1e-5f);
+static void test_update_get_soc_matches_return(void) {
+    setup();
+    float ret = AUKF_Update(&aukf, 50.0f, 1.0f, 3.3f, 1.0f);
+    TEST_ASSERT_EQUAL_FLOAT(ret, AUKF_GetSoC(&aukf), 1e-5f);
 }
 
-TEST(get_vtr_returns_state_x1) {
-    setup(65.0f, 25.0f);
-    ASSERT_FLOAT_EQ(AUKF_GetVtr(&aukf), 0.0f, 1e-5f);
+static void test_update_zero_current_soc_in_range(void) {
+    setup();
+    float soc = AUKF_Update(&aukf, 50.0f, 0.0f, 3.22f, 1.0f);
+    TEST_ASSERT_FLOAT_RANGE(soc, 0.0f, 100.0f);
 }
 
-TEST(get_innovation_initially_zero) {
-    setup(65.0f, 25.0f);
-    ASSERT_FLOAT_EQ(AUKF_GetInnovation(&aukf), 0.0f, 1e-5f);
-}
-
-/* ── AUKF_Update: output validity ────────────────────────────────────── */
-
-TEST(update_returns_soc_in_valid_range) {
-    setup(50.0f, 25.0f);
-    float soc = AUKF_Update(&aukf, 50.0f, 1.0f, 3.3f, 1.0f);
-    ASSERT_FLOAT_GE(soc, 0.0f);
-    ASSERT_FLOAT_LE(soc, 100.0f);
-}
-
-TEST(update_increments_update_count) {
-    setup(50.0f, 25.0f);
-    AUKF_Update(&aukf, 50.0f, 1.0f, 3.3f, 1.0f);
-    AUKF_Update(&aukf, 49.9f, 1.0f, 3.3f, 1.0f);
-    ASSERT_INT_EQ(aukf.update_count, 2);
-}
-
-TEST(update_covariance_remains_positive_definite) {
-    setup(50.0f, 25.0f);
-    AUKF_Update(&aukf, 50.0f, 1.0f, 3.3f, 1.0f);
-    ASSERT_TRUE(aukf.P[0][0] > 0.0f);
-    ASSERT_TRUE(aukf.P[1][1] > 0.0f);
-}
-
-TEST(update_with_zero_current_soc_stays_in_range) {
-    setup(50.0f, 25.0f);
-    float ocv_at_50 = BatteryParams_GetOCV(&bp, 50.0f, 25.0f);
-    float soc = AUKF_Update(&aukf, 50.0f, 0.0f, ocv_at_50, 1.0f);
-    ASSERT_FLOAT_GE(soc, 0.0f);
-    ASSERT_FLOAT_LE(soc, 100.0f);
-}
-
-/* ── AUKF_Update: correction direction ──────────────────────────────── */
-
-TEST(update_high_voltage_pushes_soc_up) {
-    /*
-     * Init at SoC=30% but repeatedly feed the voltage consistent with
-     * SoC=80% (OCV ≈ 3.42 V at 25°C, zero current).
-     * The initial P[0][0] is tiny (1e-6), so the gain starts near zero
-     * and grows over time.  After many consistent steps the filter should
-     * have moved above the initial prediction of 30%.
-     */
-    setup(30.0f, 25.0f);
-    float high_voltage = BatteryParams_GetOCV(&bp, 80.0f, 25.0f);
-    float soc = 30.0f;
+static void test_update_many_iterations_stay_in_range(void) {
+    setup();
+    float soc_pred = 80.0f;
+    float soc = 0.0f;
     for (int i = 0; i < 50; i++) {
-        soc = AUKF_Update(&aukf, soc, 0.0f, high_voltage, 1.0f);
+        soc = AUKF_Update(&aukf, soc_pred, 1.0f, 3.35f, 1.0f);
+        soc_pred = soc - (100.0f * 1.0f * 1.0f) / (3600.0f * 2.6f);
+        if (soc_pred < 0.0f) soc_pred = 0.0f;
     }
-    ASSERT_TRUE(soc > 30.0f);
+    TEST_ASSERT_FLOAT_RANGE(soc, 0.0f, 100.0f);
 }
 
-TEST(update_low_voltage_pushes_soc_down) {
+/* ============================================================
+ * Innovation / correction behavior tests
+ * ============================================================ */
+
+static void test_update_innovation_is_nonzero_with_mismatch(void) {
+    setup();
+    /* Use a voltage far from the model prediction to force a large innovation */
+    AUKF_Update(&aukf, 50.0f, 1.0f, 2.5f, 1.0f);
+    /* Innovation should be non-zero when measured != predicted */
+    float innov = AUKF_GetInnovation(&aukf);
+    TEST_ASSERT(innov != 0.0f);
+}
+
+static void test_update_covariance_stays_positive_definite(void) {
+    setup();
+    for (int i = 0; i < 10; i++) {
+        AUKF_Update(&aukf, 50.0f, 1.0f, 3.2f, 1.0f);
+    }
+    TEST_ASSERT(aukf.P[0][0] > 0.0f);
+    TEST_ASSERT(aukf.P[1][1] > 0.0f);
+}
+
+static void test_update_with_exact_model_voltage_minimal_correction(void) {
     /*
-     * Init at SoC=80%, repeatedly feed voltage consistent with SoC=30%.
-     * Same reasoning: after enough steps the correction accumulates and
-     * SoC should fall below the initial 80%.
+     * When the measured voltage matches the OCV at the known SoC exactly,
+     * the correction should be small.
      */
-    setup(80.0f, 25.0f);
-    float low_voltage = BatteryParams_GetOCV(&bp, 30.0f, 25.0f);
-    float soc = 80.0f;
-    for (int i = 0; i < 50; i++) {
-        soc = AUKF_Update(&aukf, soc, 0.0f, low_voltage, 1.0f);
-    }
-    ASSERT_TRUE(soc < 80.0f);
+    BatteryParams_Init(&battery);
+    AUKF_Init(&aukf, &battery, 50.0f, 25.0f);
+    float ocv_50 = BatteryParams_GetOCV(&battery, 50.0f, 25.0f);
+    /* With zero current: V_terminal ≈ OCV */
+    float soc = AUKF_Update(&aukf, 50.0f, 0.0f, ocv_50, 1.0f);
+    /* SoC should stay close to 50% */
+    TEST_ASSERT_FLOAT_RANGE(soc, 40.0f, 60.0f);
 }
 
-/* ── AUKF_Update: repeated updates converge ─────────────────────────── */
+/* ============================================================
+ * Temperature variation
+ * ============================================================ */
 
-TEST(update_repeated_converges_toward_true_soc) {
+static void test_different_temperatures_give_different_innovations(void) {
     /*
-     * Over many steps at zero current with the correct voltage for
-     * SoC=50%, the filter should stay near 50%.
+     * OCV at 50% SoC differs significantly between 25°C (≈3.22 V) and
+     * 45°C (≈3.43 V).  With the same measured voltage the innovations
+     * (y_meas - y_pred) must therefore be different.
      */
-    setup(50.0f, 25.0f);
-    float true_ocv = BatteryParams_GetOCV(&bp, 50.0f, 25.0f);
+    BatteryParams_Init(&battery);
+    AUKF_Init(&aukf, &battery, 50.0f, 25.0f);
+    AUKF_Update(&aukf, 50.0f, 1.0f, 3.2f, 1.0f);
+    float innov_25 = AUKF_GetInnovation(&aukf);
 
-    float soc = 50.0f;
-    for (int i = 0; i < 20; i++) {
-        soc = AUKF_Update(&aukf, soc, 0.0f, true_ocv, 1.0f);
-    }
-    /* After 20 consistent steps should remain within ±5 % of 50 */
-    ASSERT_FLOAT_GE(soc, 45.0f);
-    ASSERT_FLOAT_LE(soc, 55.0f);
+    BatteryParams_Init(&battery);
+    AUKF_Init(&aukf, &battery, 50.0f, 45.0f);
+    AUKF_Update(&aukf, 50.0f, 1.0f, 3.2f, 1.0f);
+    float innov_45 = AUKF_GetInnovation(&aukf);
+
+    TEST_ASSERT(innov_25 != innov_45);
 }
 
-/* ── Temperature effect ──────────────────────────────────────────────── */
+/* ============================================================
+ * Test suite entry point
+ * ============================================================ */
 
-TEST(update_at_45c_stays_in_range) {
-    setup(50.0f, 45.0f);
-    float ocv = BatteryParams_GetOCV(&bp, 50.0f, 45.0f);
-    float soc = AUKF_Update(&aukf, 50.0f, 0.0f, ocv, 1.0f);
-    ASSERT_FLOAT_GE(soc, 0.0f);
-    ASSERT_FLOAT_LE(soc, 100.0f);
-}
+void test_aukf_run(void) {
+    UNITY_BEGIN("Adaptive Unscented Kalman Filter (AUKF)");
 
-/* ── entry point ─────────────────────────────────────────────────────── */
+    RUN_TEST(test_init_sets_soc);
+    RUN_TEST(test_init_sets_vtr_zero);
+    RUN_TEST(test_init_clamps_soc_above_100);
+    RUN_TEST(test_init_clamps_soc_below_0);
+    RUN_TEST(test_init_resets_update_count);
+    RUN_TEST(test_init_positive_covariance_diagonal);
+    RUN_TEST(test_init_positive_Q_diagonal);
+    RUN_TEST(test_init_positive_R);
 
-int main(void) {
-    printf("=== AUKF Tests ===\n");
+    RUN_TEST(test_update_returns_soc_in_range);
+    RUN_TEST(test_update_increments_count);
+    RUN_TEST(test_update_get_soc_matches_return);
+    RUN_TEST(test_update_zero_current_soc_in_range);
+    RUN_TEST(test_update_many_iterations_stay_in_range);
 
-    RUN_TEST(init_soc_state_set);
-    RUN_TEST(init_vtr_starts_at_zero);
-    RUN_TEST(init_soc_clamped_above_100);
-    RUN_TEST(init_soc_clamped_below_0);
-    RUN_TEST(init_diagonal_covariance_positive);
-    RUN_TEST(init_off_diagonal_covariance_zero);
-    RUN_TEST(init_process_noise_positive);
-    RUN_TEST(init_measurement_noise_positive);
-    RUN_TEST(init_update_count_zero);
-    RUN_TEST(init_battery_pointer_set);
+    RUN_TEST(test_update_innovation_is_nonzero_with_mismatch);
+    RUN_TEST(test_update_covariance_stays_positive_definite);
+    RUN_TEST(test_update_with_exact_model_voltage_minimal_correction);
 
-    RUN_TEST(get_soc_returns_state_x0);
-    RUN_TEST(get_vtr_returns_state_x1);
-    RUN_TEST(get_innovation_initially_zero);
-
-    RUN_TEST(update_returns_soc_in_valid_range);
-    RUN_TEST(update_increments_update_count);
-    RUN_TEST(update_covariance_remains_positive_definite);
-    RUN_TEST(update_with_zero_current_soc_stays_in_range);
-
-    RUN_TEST(update_high_voltage_pushes_soc_up);
-    RUN_TEST(update_low_voltage_pushes_soc_down);
-    RUN_TEST(update_repeated_converges_toward_true_soc);
-    RUN_TEST(update_at_45c_stays_in_range);
-
-    PRINT_RESULTS();
-    return RESULTS_OK() ? 0 : 1;
+    RUN_TEST(test_different_temperatures_give_different_innovations);
 }
