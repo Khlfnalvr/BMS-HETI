@@ -14,7 +14,7 @@ CFLAGS  = -Wall -Wextra -std=c99 -g \
 LDFLAGS = -lm
 
 SRC_DIR = ..
-OBJ_DIR = build
+OBJ_DIR = obj
 
 # Source files under test (no Main.c — it depends on STM32 HAL)
 SRC = \
